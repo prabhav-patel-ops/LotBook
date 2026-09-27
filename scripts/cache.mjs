@@ -1,0 +1,11 @@
+import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+const files=(await readdir('dist/assets')).map(f=>'assets/'+f);
+const assets=['./','manifest.webmanifest','icon.svg','icons/icon-192.png','icons/icon-512.png','icons/maskable-512.png','guide.html',...files];
+const hash=createHash('sha256');
+for(const path of [...assets,'sw.js']) hash.update(await readFile('dist/'+(path==='./'?'index.html':path)));
+const version=hash.digest('hex').slice(0,12);
+let source=await readFile('dist/sw.js','utf8');
+source=source.replace("'lotbook-shell-v1'",`'lotbook-shell-${version}'`);
+source=source.replace("[root, new URL('icon.svg',root).href, new URL('manifest.webmanifest',root).href]",`${JSON.stringify(assets)}.map(path=>new URL(path,root).href)`);
+await writeFile('dist/sw.js',source);

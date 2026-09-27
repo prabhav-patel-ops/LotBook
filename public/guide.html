@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Lotbook — Flow &amp; first-version guide</title>
+    <style>
+      body {
+        font:
+          15px/1.7 system-ui,
+          sans-serif;
+        background: #f4f7f1;
+        color: #234232;
+        margin: 0;
+      }
+      main {
+        max-width: 820px;
+        margin: 45px auto;
+        padding: 38px;
+        background: #fff;
+        border: 1px solid #dce6d7;
+        border-radius: 16px;
+      }
+      h1 {
+        font:
+          42px Georgia,
+          serif;
+        line-height: 1.15;
+      }
+      h2 {
+        font-size: 19px;
+        margin-top: 35px;
+      }
+      p,
+      li {
+        color: #65775e;
+      }
+      a {
+        color: #136b58;
+      }
+      small {
+        color: #8a997f;
+      }
+      .tag {
+        color: #136b58;
+        font-size: 10px;
+        letter-spacing: 2px;
+      }
+      .flow {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .flow span {
+        background: #eaf3e4;
+        padding: 12px 15px;
+        border-radius: 8px;
+        font-size: 12px;
+      }
+      .box {
+        background: #f2f6ec;
+        padding: 20px;
+        border-radius: 10px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 13px;
+      }
+      td,
+      th {
+        text-align: left;
+        border-bottom: 1px solid #e4ebdf;
+        padding: 10px;
+      }
+      th {
+        color: #698463;
+      }
+      @media (max-width: 600px) {
+        main {
+          margin: 0;
+          border: 0;
+          border-radius: 0;
+          padding: 26px;
+        }
+        h1 {
+          font-size: 34px;
+        }
+      }
+      @media print {
+        body {
+          background: white;
+        }
+        main {
+          border: 0;
+          margin: 0;
+          padding: 15px;
+        }
+        a {
+          color: #234232;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="tag">LOTBOOK · PERSONAL MVP · 27 SEPTEMBER 2026</div>
+      <h1>Your shares.<br />Your trading story.</h1>
+      <p>
+        A private trading diary that separates core holdings from trading cycles
+        and lets you match a recorded sale to specific purchase lots.
+      </p>
+      <div class="flow">
+        <span>1. Enter your name</span><span>2. Upload &amp; review</span
+        ><span>3. See holdings</span><span>4. Record sales</span
+        ><span>5. Follow cycles</span>
+      </div>
+      <h2>What is included</h2>
+      <ul>
+        <li>
+          A name-only local profile, with no passwords, brokerage login or cloud
+          account.
+        </li>
+        <li>
+          CSV and Excel imports, with column detection, manual column mapping,
+          preview and confirmation. PDF text preview is local, but arbitrary PDF
+          layouts are not automatically converted to trades.
+        </li>
+        <li>
+          Purchase lots classified as Core or Trading, a holdings dashboard,
+          manual stock prices, and manually entered cash balance.
+        </li>
+        <li>
+          Record a sale made in your broker account. Allocate the sold quantity
+          across chosen lots, fill the cheapest lots first, or choose FIFO.
+        </li>
+        <li>
+          Completed lot cycles showing gross result, proportional recorded
+          charges, net result, dates and holding duration. Independent FIFO
+          comparison.
+        </li>
+        <li>
+          Transaction history, decision notes, monthly cycle summaries, and a
+          holdings snapshot reconciliation.
+        </li>
+        <li>
+          Validated JSON backup import/export, transaction CSV export,
+          last-transaction undo, and explicit confirmation before clearing data.
+        </li>
+        <li>
+          An Android-installable PWA with a distinct icon and offline app cache.
+        </li>
+      </ul>
+      <h2>Which Groww documents to use</h2>
+      <p>
+        Start with <b>equity Order / Trade history</b> for every relevant
+        period, ideally from the first purchase. In Groww, use Profile → Reports
+        → Transaction / Order history and export Excel or CSV. Next upload a
+        <b>current holdings snapshot</b> with stock, quantity and average
+        purchase price. A snapshot checks quantities; it does not invent
+        historical trades. Contract notes help you enter actual charges when
+        they are absent from order history.
+      </p>
+      <p>
+        A P&amp;L summary or balance statement alone is insufficient to
+        reconstruct purchase lots. The app explains missing history and rejects
+        imports that would oversell a holding. If older purchases are
+        unavailable, explicitly record an opening lot with its known quantity
+        and cost, using the note “opening balance”. Use matching stock
+        identifiers across reports and manual entries.
+      </p>
+      <p>
+        Sources:
+        <a
+          href="https://groww.in/help/my-account/ma-others/where-can-i-get-the-transaction-history"
+          rel="noreferrer"
+          >Groww transaction history instructions</a
+        >
+        and
+        <a
+          href="https://groww.in/help/my-account/ma-others/where-can-i-get-the-contract-note"
+          rel="noreferrer"
+          >Groww contract notes</a
+        >.
+      </p>
+      <h2>The lot example</h2>
+      <table>
+        <tr>
+          <th>Event</th>
+          <th>Quantity</th>
+          <th>Price</th>
+          <th>Purpose</th>
+        </tr>
+        <tr>
+          <td>Earlier buy</td>
+          <td>10</td>
+          <td>₹1,300</td>
+          <td>Core</td>
+        </tr>
+        <tr>
+          <td>Later buy</td>
+          <td>10</td>
+          <td>₹1,250</td>
+          <td>Trading</td>
+        </tr>
+        <tr>
+          <td>Sale allocated to later buy</td>
+          <td>10</td>
+          <td>₹1,270</td>
+          <td>Cycle closed</td>
+        </tr>
+      </table>
+      <div class="box">
+        <b>Diary realised: +₹200. FIFO realised: −₹300.</b>
+        <p>
+          The diary retains the ₹1,300 core lot; FIFO retains the ₹1,250 lot. At
+          ₹1,270, total realised plus unrealised is −₹100 in either view, before
+          charges. Lot attribution cannot create wealth or alter broker or tax
+          records.
+        </p>
+      </div>
+      <h2>First-use flow</h2>
+      <ol>
+        <li>
+          Open Lotbook and enter your name. You can explore synthetic demo data
+          or skip uploads and start manually.
+        </li>
+        <li>
+          Choose the right statement type, review parsed rows, choose
+          Core/Trading for each purchase, and confirm. Suspicious duplicates are
+          skipped; identical legitimate fills can be entered manually.
+        </li>
+        <li>
+          Tap a stock for every purchase lot and its remaining balance. Update
+          the manually entered price when needed.
+        </li>
+        <li>
+          After selling through Groww, choose Record sale, enter the date,
+          quantity, price and fees, then allocate the full quantity across
+          available lots. Confirm only when the preview is correct.
+        </li>
+        <li>
+          Review Cycles for realised results and the Diary for the transaction
+          trail. Export a backup before changing devices or clearing browser
+          storage.
+        </li>
+      </ol>
+      <h2>Privacy and storage</h2>
+      <p>
+        Your name, parsed transactions, quotes, snapshots and notes are stored
+        in this browser’s local storage. Original statements are read in memory
+        and discarded after parsing. Financial records are never uploaded to
+        GitHub, an API, analytics, or an AI service. GitHub Pages receives
+        normal requests for app files. The app uses locally bundled libraries,
+        icons and fonts.
+      </p>
+      <p>
+        This is not encrypted cloud storage or a secure sign-in system. A person
+        using the same unlocked browser can access the diary. Incognito
+        sessions, browser clearing, storage eviction or device loss can erase
+        records. Keep JSON backups privately; those exports contain your
+        financial information. Each device has a separate diary unless you
+        transfer a backup.
+      </p>
+      <h2>Android and offline use</h2>
+      <p>
+        Open the hosted URL in Android Chrome. Use Install app when offered, or
+        Chrome’s menu → Add to Home screen. A standalone Lotbook icon opens the
+        app. On iPhone, use Safari → Share → Add to Home Screen. Browser prompts
+        vary; in-app browsers may not offer installation. Offline use starts
+        after the initial app cache finishes downloading online.
+      </p>
+      <h2>Scope and known limits</h2>
+      <p>
+        Equity long positions only. No broker connection, live quotes, actual
+        order execution, dividend accounting, tax filing, corporate actions,
+        transfer reconstruction, mutual funds, F&amp;O, margin or short-selling
+        support. Imported sales initially use FIFO until specifically recorded
+        with a diary lot allocation. This version does not edit past sales; use
+        a clean import or undo the last transaction if a correction is needed.
+        Same-day history follows report row order. Fees are actual recorded
+        values, never estimates. Format support is tested on synthetic reports;
+        an actual redacted Groww export may require additional aliases.
+      </p>
+      <p>
+        Files are limited to 15 MB and parsed previews to 20,000 rows.
+        Unrecognised rows are flagged. JSON restores are validated before
+        replacing records. The journal is for understanding your trading
+        decisions; official broker statements remain your reference for
+        settlement and tax reporting.
+      </p>
+      <h2>How it is verified</h2>
+      <p>
+        The release is checked with accounting and importer tests, a production
+        build, mobile-width layout checks, and browser flows for onboarding,
+        purchases, specific-lot sales and persistence. The user’s actual
+        statement format still needs a first-use reconciliation with Groww; no
+        personal financial file was used to create the repository.
+      </p>
+      <p>
+        <a href="./">Open Lotbook →</a> ·
+        <a href="https://github.com/prabhav-patel-ops/LotBook"
+          >Public source code</a
+        >
+      </p>
+      <small
+        >You can print this document or save it as a PDF from your
+        browser.</small
+      >
+    </main>
+  </body>
+</html>

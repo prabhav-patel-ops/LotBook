@@ -1,0 +1,4 @@
+Stock,Trade Date,Buy/Sell,Quantity,Price,Charges,Status
+INFY,15/09/2026,BUY,8,1420,10,Completed
+INFY,16/09/2026,SELL,2,1500,4,Executed
+INFY,17/09/2026,BUY,5,1490,2,Cancelled
