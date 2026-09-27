@@ -2,7 +2,7 @@
 
 ## Passed
 
-- 53 automated tests: pure accounting, independent FIFO, partial quantities and fee allocation, chronology, invalid/oversold lots, CSV/XLSX parsing, status filtering, report mapping, backup validation, CSV formula protection, monthly rounding and offline cache navigation.
+- 54 automated tests: pure accounting, independent FIFO, partial quantities and fee allocation, chronology, invalid/oversold lots, completed purchase-lot history, CSV/XLSX parsing, status filtering, report mapping, backup validation, CSV formula protection, monthly rounding and offline cache navigation.
 - Production build; production dependency audit found zero known vulnerabilities at release time.
 - Browser onboarding, manual purchases, Core/Trading classification, lowest-price sale selection, manual valuation and persistence after refresh.
 - Synthetic CSV preview and confirmation: 2 executed trades accepted; 1 cancelled order excluded. Resulting holdings and fees matched the expected ledger.

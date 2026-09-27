@@ -57,7 +57,7 @@ test('nonexistent, future, wrong-symbol and exhausted explicit lots never fall b
   }
   const exhausted = analyse([buy('a'), sell('s'), buy('b'), sell('bad', { allocations: [{ lotId: 'a', quantity: 10 }] })]);
   assert.equal(exhausted.errors.length, 1);
-  assert.equal(exhausted.holdings[0].lots[0].id, 'b');
+  assert.equal(exhausted.holdings[0].lots.find(l => l.remaining > 0).id, 'b');
 });
 
 test('explicit selection exceeding one lot is atomic despite sufficient symbol balance', () => {
@@ -239,5 +239,31 @@ test('failure in a later explicit allocation leaves earlier allocations untouche
   assert.equal(result.cycles[0].net, 38);
   assert.equal(result.totals.fifoNet, 38);
   assert.equal(result.totals.charges, 2);
-  assert.equal(result.holdings[0].lots[0].id, 'b');
+  assert.equal(result.holdings[0].lots.find(l => l.remaining > 0).id, 'b');
+});
+
+test('currently held symbols retain closed trading lots without changing active summaries', () => {
+  const result = analyse([
+    buy('core', { quantity: 10, price: 1300, charges: 10 }),
+    buy('trade', { date: '2026-01-02', quantity: 10, price: 1250, charges: 5, purpose: 'trading' }),
+    buy('other', { symbol: 'XYZ', quantity: 1 }),
+    sell('close-trade', { quantity: 10, price: 1270, allocations: [{ lotId: 'trade', quantity: 10 }] }),
+    sell('close-other', { symbol: 'XYZ', quantity: 1 }),
+  ], { ABC: 1270 });
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.holdings.length, 1);
+  const h = result.holdings[0];
+  assert.equal(h.quantity, 10);
+  assert.equal(h.coreQuantity, 10);
+  assert.equal(h.tradingQuantity, 0);
+  assert.equal(h.cost, 13010);
+  assert.equal(h.averageCost, 1301);
+  assert.equal(h.currentValue, 12700);
+  assert.equal(h.unrealized, -310);
+  assert.equal(result.totals.invested, 13010);
+  assert.deepEqual(h.lots.map(l => l.id), ['core', 'trade']);
+  assert.deepEqual(h.lots[1], {
+    id: 'trade', date: '2026-01-02', purpose: 'trading', quantity: 10,
+    remaining: 0, price: 1250, chargesRemaining: 0,
+  });
 });

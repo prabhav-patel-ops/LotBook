@@ -126,6 +126,7 @@ function consume(selected) {
  * invested is remaining acquisition cost including remaining buy fees; charges is
  * all accepted buy/sell fees; unpriced counts holdings without a valid quote.
  * currentValue/unrealized totals cover priced holdings only (see unpriced).
+ * Holdings include only currently held symbols; their lots include closed purchases.
  * monthlyResults contains {month,net,gross,charges}, grouped by sell month
  * (YYYY-MM), sorted oldest first, and rounded after summing unrounded cycles.
  * Monthly charges include only fees allocated to those realized cycles.
@@ -193,7 +194,7 @@ export function analyse(transactions, prices = {}) {
       currentValue: value === null ? null : money(value), unrealized: value === null ? null : money(value - cost),
       coreQuantity: quantityOut(group.filter(l => l.purpose === 'core').reduce((sum, l) => sum + l.remaining, 0)),
       tradingQuantity: quantityOut(group.filter(l => l.purpose === 'trading').reduce((sum, l) => sum + l.remaining, 0)),
-      lots: group.map(l => ({ id: l.id, date: l.date, purpose: l.purpose, quantity: quantityOut(l.quantity), remaining: quantityOut(l.remaining), price: l.price, chargesRemaining: money(l.charges * (l.remaining / l.quantity)) })),
+      lots: lots.filter(l => l.symbol === symbol).map(l => ({ id: l.id, date: l.date, purpose: l.purpose, quantity: quantityOut(l.quantity), remaining: quantityOut(l.remaining), price: l.price, chargesRemaining: money(l.charges * (l.remaining / l.quantity)) })),
     };
   });
   const months = new Map();
