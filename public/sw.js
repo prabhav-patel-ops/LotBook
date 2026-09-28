@@ -1,4 +1,4 @@
-const CACHE = 'lotbook-shell-v1';
+const CACHE = 'lotbook-shell-v2';
 const root = new URL('./', self.location).href;
 self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE).then(cache => cache.addAll([root, new URL('icon.svg',root).href, new URL('manifest.webmanifest',root).href])).then(()=>self.skipWaiting())); });
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k=>k.startsWith('lotbook-shell-') && k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));

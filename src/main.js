@@ -1,6 +1,7 @@
 import "./style.css";
 import { analyse, validateTransaction, orderedTransactions } from "./ledger.js";
 import { parseStatement, parseRows } from "./importer.js";
+import { parseReferenceStatement, summarizeReferenceEntries } from "./reference-reports.js";
 import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js";
 import { csvCell, allocateLots } from "./ui-logic.js";
 import { planTransactions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
@@ -20,6 +21,8 @@ const $ = (s) => document.querySelector(s),
 const money = (v) =>
   v === null || v === undefined
     ? "—"
+    : state?.privacyMode
+      ? "••••"
     : new Intl.NumberFormat("en-IN", {
         style: "currency",
         currency: "INR",
@@ -91,6 +94,7 @@ const icons = {
   cycles: "↗",
   diary: "▤",
   import: "⇧",
+  info: "ⓘ",
   settings: "⚙",
 };
 function render() {
@@ -114,6 +118,7 @@ function render() {
     cycles: "Trading cycles",
     diary: "Your trading diary",
     import: "Bring your history",
+    info: "Info & tax reference",
     settings: "Your space",
   };
   $("#app").innerHTML =
@@ -122,21 +127,21 @@ function render() {
     )
       .map(
         ([v, i]) =>
-          `<button class="nav ${v === view ? "active" : ""}" data-view="${v}"><span>${i}</span>${{ holdings: "Holdings", cycles: "Cycles", diary: "Diary", import: "Statements", settings: "Settings" }[v]}</button>`,
+          `<button class="nav ${v === view ? "active" : ""}" data-view="${v}"><span>${i}</span>${{ holdings: "Holdings", cycles: "Cycles", diary: "Diary", import: "Statements", info: "Info", settings: "Settings" }[v]}</button>`,
       )
       .join(
         "",
       )}</nav><div class="sidebar-foot"><span class="privacy-dot"></span> Private on this device<p>Your data stays with you.</p><a href="./guide.html" target="_blank" rel="noopener">How Lotbook works ↗</a></div></aside>
-  <div class="workspace"><header><div class="mobile-brand"><span class="logo">L</span> Lotbook</div><div class="breadcrumb">PERSONAL DIARY <span>/</span> ${esc(titles[view])}</div><div class="profile"><span class="avatar">${esc(state.profile[0].toUpperCase())}</span><span>${esc(state.profile)}</span></div></header><main class="content"><div class="page-title"><div><div class="eyebrow">${view === "holdings" ? "A CLEARER PICTURE, ONE LOT AT A TIME" : "YOUR JOURNEY, IN PERSPECTIVE"}</div><h1>${titles[view]}</h1><p>${{ holdings: "A little clarity for every share you own.", cycles: "Follow the journey from a purchase to a sale.", diary: "The trades, decisions, and lessons behind your portfolio.", import: "Read your statements locally. Review before adding.", settings: "Back up your diary, install the app, and manage your data." }[view]}</p></div>${view === "holdings" ? '<button data-action="buy">＋ Add a purchase</button>' : ""}</div>
+  <div class="workspace"><header><div class="mobile-brand"><span class="logo">L</span> Lotbook</div><div class="breadcrumb">PERSONAL DIARY <span>/</span> ${esc(titles[view])}</div><div class="profile"><button class="privacy-toggle" data-action="privacy" aria-pressed="${state.privacyMode?'true':'false'}" title="${state.privacyMode?'Show amounts':'Hide amounts'}">${state.privacyMode?'◉':'◌'} <span>${state.privacyMode?'Amounts hidden':'Hide amounts'}</span></button><span class="avatar">${esc(state.profile[0].toUpperCase())}</span><span>${esc(state.profile)}</span></div></header><main class="content"><div class="page-title"><div><div class="eyebrow">${view === "holdings" ? "A CLEARER PICTURE, ONE LOT AT A TIME" : "YOUR JOURNEY, IN PERSPECTIVE"}</div><h1>${titles[view]}</h1><p>${{ holdings: "A little clarity for every share you own.", cycles: "Follow the journey from a purchase to a sale.", diary: "The trades, decisions, and lessons behind your portfolio.", import: "Read your statements locally. Review before adding.", info: "What each report means, how the numbers are used, and the tax reference.", settings: "Back up your diary, install the app, and manage your data." }[view]}</p></div>${view === "holdings" ? '<button data-action="buy">＋ Add a purchase</button>' : ""}</div>
   ${demo ? '<div class="notice">You are exploring synthetic demo data. It is not saved. <button class="text-button" data-action="enddemo">Exit demo</button></div>' : ""}
   ${a.errors.length ? `<div class="notice error">${a.errors.length} transactions could not be applied. ${esc(a.errors[0].message)} Check your history before relying on totals.</div>` : ""}
-  ${view === "holdings" ? holdings(a) : view === "cycles" ? cycles(a) : view === "diary" ? diary(a) : view === "import" ? uploadContent() : settings()}
+  ${view === "holdings" ? holdings(a) : view === "cycles" ? cycles(a) : view === "diary" ? diary(a) : view === "import" ? uploadContent() : view === "info" ? infoContent(a) : settings()}
   <footer>Private by design <span>·</span> Saved on this device <span>·</span> No broker connection <span>·</span> v${__APP_VERSION__}</footer></main></div><nav class="mobile-nav">${Object.entries(
     icons,
   )
     .map(
       ([v, i]) =>
-        `<button data-view="${v}" class="${view === v ? "active" : ""}"><span>${i}</span>${{ holdings: "Holdings", cycles: "Cycles", diary: "Diary", import: "Import", settings: "Settings" }[v]}</button>`,
+        `<button data-view="${v}" class="${view === v ? "active" : ""}"><span>${i}</span>${{ holdings: "Holdings", cycles: "Cycles", diary: "Diary", import: "Import", info: "Info", settings: "Settings" }[v]}</button>`,
     )
     .join("")}</nav>`;
 }
@@ -227,7 +232,7 @@ function uploadPage(first) {
     `<main class="onboarding"><div class="brand"><span class="logo">L</span> Lotbook</div><div class="step-label">STEP 2 OF 2 · YOUR HISTORY</div><h1>Bring your investing story.</h1><p>Hi ${esc(state.profile)}. Start with your Groww reports, or build the diary manually.</p>${uploadContent()}<button class="secondary full" data-action="skip">Start with an empty diary →</button></main>`;
 }
 function uploadContent() {
-  return `<div class="upload-grid"><section class="panel mini"><span class="step-number">01</span><h2>Order / trade history</h2><p><b>Required for a full history.</b> Export equity buys and sells for the entire period from Groww → Profile → Reports → Transactions → select the report and time frame → Download. Look for Stocks Order History; prefer an unprotected Excel or CSV file.</p><label class="upload-target">⇧ <b>Choose trade statement</b><small>CSV · XLSX · XLS · PDF · up to 15 MB</small><input type="file" class="statement" data-kind="trades" accept=".csv,.xlsx,.xls,.pdf"></label></section><section class="panel mini"><span class="step-number">02</span><h2>Current holdings</h2><p><b>Recommended to reconcile.</b> Look for Stock Holding Statement in Groww Reports. Use stock and quantity; average price is optional. It checks the history; it does not add duplicate purchases.</p><label class="upload-target">⇧ <b>Choose holdings statement</b><small>CSV · XLSX · XLS · PDF</small><input type="file" class="statement" data-kind="holdings" accept=".csv,.xlsx,.xls,.pdf"></label><button class="secondary" data-action="snapshot">Enter holdings manually</button></section></div><div class="notice"><b>Getting the right history</b><p>Use all relevant periods. A P&amp;L summary alone cannot reconstruct purchase lots. Dividends, corporate actions, transfers, F&amp;O, mutual funds and short positions are outside this equity MVP. Add an opening purchase lot when older history is unavailable, and label it in the note.</p><p>Contract notes show charges. Enter charges per transaction if your trade report omits them. PDF layouts vary; extracted text stays local and Excel is more reliable.</p><a href="https://groww.in/help/my-account/ma-others/where-can-i-get-the-transaction-history" target="_blank" rel="noopener noreferrer">Groww’s report instructions ↗</a></div>${
+  return `<div class="upload-grid"><section class="panel mini"><span class="step-number">01</span><h2>Order / trade history</h2><p><b>Builds the lot diary.</b> Upload Stocks Order History for every relevant period. These executed buys and sells create the lots, allocations and trading cycles.</p><label class="upload-target">⇧ <b>Choose order history</b><small>CSV · XLSX · XLS · PDF · up to 15 MB</small><input type="file" class="statement" data-kind="trades" accept=".csv,.xlsx,.xls,.pdf"></label></section><section class="panel mini"><span class="step-number">02</span><h2>Current holdings</h2><p><b>Checks the current position.</b> Upload Stock Holding Statement. It reconciles quantities and broker average price; it never creates purchases.</p><label class="upload-target">⇧ <b>Choose holdings statement</b><small>CSV · XLSX · XLS · PDF</small><input type="file" class="statement" data-kind="holdings" accept=".csv,.xlsx,.xls,.pdf"></label><button class="secondary" data-action="snapshot">Enter holdings manually</button></section><section class="panel mini"><span class="step-number">03</span><h2>Profit &amp; Loss</h2><p><b>Reference report.</b> Upload Stocks P&amp;L for realised and unrealised broker-reported results. It does not overwrite your diary lots or costs.</p><label class="upload-target">⇧ <b>Choose P&amp;L report</b><small>CSV · XLSX · XLS</small><input type="file" class="statement" data-kind="pnl" accept=".csv,.xlsx,.xls"></label></section><section class="panel mini"><span class="step-number">04</span><h2>Capital Gains / tax</h2><p><b>Tax reference.</b> Upload each Capital Gains Statement, including one file per financial year. Short-term and long-term sections stay separate.</p><label class="upload-target">⇧ <b>Choose Capital Gains report</b><small>CSV · XLSX · XLS</small><input type="file" class="statement" data-kind="capital-gains" accept=".csv,.xlsx,.xls"></label></section></div><div class="notice"><b>How the five reports work together</b><p>Order History and Holdings run the portfolio diary. P&amp;L and each Capital Gains statement are saved as broker reference data for the Info tab. This lets you upload all five reports without using a summary report to manufacture transactions.</p><p>Statements are read in this browser and saved only in its local storage. The original files are not uploaded or kept in the repository. Contract notes remain the source for exact brokerage and statutory charges.</p><a href="https://groww.in/help/my-account/ma-others/where-can-i-get-the-transaction-history" target="_blank" rel="noopener noreferrer">Groww’s report instructions ↗</a></div>${
     state.imports.length
       ? `<section class="panel mini"><h2>Import log</h2>${state.imports
           .slice()
@@ -239,6 +244,13 @@ function uploadContent() {
           .join("")}</section>`
       : ""
   }`;
+}
+function referenceReports(kind){return state.referenceReports.filter(report=>!kind||report.kind===kind);}
+function reportPeriod(report){return report.period?.start&&report.period?.end?`${report.period.start} to ${report.period.end}`:'Period not identified';}
+function infoContent(a) {
+  const reports=referenceReports(),capital=referenceReports('capital-gains'),pnl=referenceReports('pnl');
+  const capitalEntries=capital.flatMap(report=>report.entries),tax=summarizeReferenceEntries(capitalEntries);
+  return `<section class="panel info-hero"><div><span class="eyebrow">ⓘ LOTBOOK GUIDE</span><h2>Every number has a source.</h2><p>LotBook keeps the diary, broker reports, and tax reference distinct. That makes it useful without pretending a broker summary is a trade ledger.</p></div><button class="secondary" data-action="privacy">${state.privacyMode?'Show amounts':'Hide amounts'} in public</button></section><section class="panel"><div class="panel-title"><div><h2>What the reports represent</h2><span>All data stays in this browser</span></div></div><div class="report-grid"><article><b>Stocks Order History</b><p>Executed buy and sell records. This is the source for purchase lots, sale matching, diary P&amp;L, and remaining holdings.</p></article><article><b>Stock Holdings Statement</b><p>A point-in-time broker snapshot. It compares reported quantity and average price with the diary; it never creates a missing purchase.</p></article><article><b>Stocks P&amp;L</b><p>Groww’s realised and unrealised result view. It is a broker reference and can differ from chosen diary lots, costs, cut-off, and average-price conventions.</p></article><article><b>Capital Gains Statement</b><p>Groww’s realised short-term and long-term sale reference for the selected period. It supports tax review but does not calculate your final return.</p></article></div></section><section class="panel"><div class="panel-title"><div><h2>Tax reference from Capital Gains statements</h2><span>${capital.length?`${capital.length} report${capital.length===1?'':'s'} saved locally`:'No Capital Gains statement saved yet'}</span></div></div>${capital.length?`<div class="stats compact"><div class="stat-card"><span>Reported short-term P&amp;L</span><strong class="${tone(tax.shortTerm)}">${money(tax.shortTerm)}</strong><small>Groww-labelled short-term rows</small></div><div class="stat-card"><span>Reported long-term P&amp;L</span><strong class="${tone(tax.longTerm)}">${money(tax.longTerm)}</strong><small>Groww-labelled long-term rows</small></div><div class="stat-card"><span>Unclassified realised P&amp;L</span><strong class="${tone(tax.unclassified)}">${money(tax.unclassified)}</strong><small>Requires classification review</small></div></div><div class="reference-list">${capital.map(report=>{const s=summarizeReferenceEntries(report.entries);return `<div class="kv"><span><b>Capital Gains</b><small>${esc(reportPeriod(report))} · ${report.entries.length} reference rows</small></span><span>ST ${money(s.shortTerm)}<small>LT ${money(s.longTerm)} · Realised ${money(s.realised)}</small></span></div>`}).join('')}</div>`:`<div class="empty"><h3>Add your Capital Gains Statements</h3><p>Upload every financial-year report in Statements. They will appear here separately.</p><button data-view="import">Open Statements</button></div>`}<details class="info-details" open><summary>How tax treatment is shown</summary><p>For eligible listed equity where the statutory conditions are met, the current Income Tax Department references show short-term capital gains under section 111A at 20% and long-term gains under section 112A at 12.5%. The ₹1.25 lakh section 112A threshold applies to eligible long-term gains for the relevant year, not to the whole portfolio.</p><p>LotBook does <b>not</b> show a final tax payable figure. Final liability can depend on eligibility, STT, residential status, other income, set-off and carried-forward losses, grandfathering rules, surcharge, and 4% health and education cess. Use the Capital Gains statement and an ITR/tax professional for filing.</p><p><a href="https://www.incometax.gov.in/iec/foportal/help/all-topics/e-filing-services/itr-2/itr-2-UM" target="_blank" rel="noopener noreferrer">Income Tax Department: ITR-2 capital-gains guidance ↗</a> · <a href="https://www.incometax.gov.in/iec/foportal/help/individual/return-applicable-1" target="_blank" rel="noopener noreferrer">Income Tax Department: section 112A threshold reference ↗</a></p></details></section><section class="two-col"><section class="panel mini"><h2>Diary P&amp;L</h2><p><b>Result after recorded costs</b> is based on the purchase lots you chose for sales, plus only recorded transaction charges. It is useful for your journal and does not change your Groww records.</p><p><b>Diary FIFO comparison</b> applies FIFO to the diary’s loaded transactions only. It is not a broker or tax certificate.</p></section><section class="panel mini"><h2>Broker P&amp;L reference</h2><p>${pnl.length?`${pnl.length} P&amp;L report${pnl.length===1?' is':'s are'} saved. `:'No P&amp;L report saved yet. '}Groww’s realised/unrealised view may use its own average-price, timing, and statement rules. Compare it with the diary; do not expect different bases to be identical.</p><p><b>Recorded costs</b> means only fees supplied by a report or entered by you. Blank costs remain unknown, never assumed to be zero.</p></section></section><section class="panel mini"><h2>Privacy in public places</h2><p>Use <b>Hide amounts</b> in the header to mask currency values across LotBook while leaving the structure visible. It is a screen-privacy tool, not encryption. Anyone with access to this browser profile can still reveal the values, so export a backup before clearing browser data or changing devices.</p></section>`;
 }
 function settings() {
   return `<div class="two-col"><section class="panel mini"><h2>Your local profile</h2><form id="profile-form"><label>Name<input name="name" value="${esc(state.profile)}" maxlength="60" required></label><button>Save name</button></form><p>A convenience profile on this browser. No password or cloud account.</p></section><section class="panel mini"><h2>Install Lotbook</h2><p>On Android, open this site in Chrome and use Install app or the menu → Add to Home screen. On iPhone use Safari → Share → Add to Home Screen.</p><button data-action="install">Install / instructions</button><small>Install prompts depend on your browser. Offline use works after the app has loaded online.</small></section><section class="panel mini"><h2>Keep a backup</h2><p>Export a JSON diary for another device. Import replaces this diary only after validation and confirmation.</p><button data-action="export">Export backup</button><label class="button secondary">Import backup<input type="file" id="restore" accept=".json" hidden></label><button class="text-button" data-action="csv">Export transactions CSV</button></section><section class="panel mini"><h2>Privacy &amp; data</h2><p>Parsed records live in this browser’s local storage. Statements are processed in memory and are never sent to our servers or GitHub. No analytics, external fonts, ads, broker API, or AI service.</p><p>Public GitHub hosts the app files and receives ordinary web requests. It does not receive your name or financial records. Shared devices and browser clearing can expose or erase local data.</p><button class="danger secondary" data-action="clear">Clear all local data</button></section></div><section class="panel mini"><h2>App updates · v${__APP_VERSION__}</h2><p>After changes are published, refresh to load the latest app. Export before changing browsers or clearing website data.</p><button data-action="checkupdate">Check for app update</button><button class="secondary" data-action="refresh">Refresh app</button></section><section class="panel mini"><h2>Understand the numbers</h2><p>Selecting a purchase lot changes realised and unrealised attribution in your diary. It does not change the shares actually sold through Groww, broker FIFO records, or total wealth. Verify charges and broker records independently. Current prices and cash are manually entered and can become stale.</p><a href="./guide.html" target="_blank">Read the app flow and limitations ↗</a></section>`;
@@ -384,16 +396,24 @@ async function importFile(file, kind) {
   const run = ++importRun;
   notify("Reading locally…");
   try {
-    const p = await parseStatement(file, kind);
+    const reference=['pnl','capital-gains'].includes(kind);
+    const p = reference ? await parseReferenceStatement(file, kind) : await parseStatement(file, kind);
     if(run!==importRun)return;
-    pending = { ...p, kind };
+    pending = { ...p, kind, reference };
     importPreview();
   } catch (e) {
     if(run===importRun)modal('Statement could not be read',`<p class="notice error" role="alert">${esc(e.message)}</p><p>Nothing was saved. Use an unprotected CSV/XLSX export, or the template below. PDF text is a local reference, not a reliable transaction table.</p><button data-action="template">Download trade template</button>`);
   }
 }
+function referencePreview(){
+  const p=pending,summary=p.summary||summarizeReferenceEntries(p.entries||[]),warnings=(p.warnings||[]);
+  const name=p.kind==='pnl'?'Profit & Loss':'Capital Gains';
+  const categories=p.kind==='capital-gains'?`<div class="stats compact"><div class="stat-card"><span>Short-term realised P&amp;L</span><strong class="${tone(summary.shortTerm)}">${money(summary.shortTerm)}</strong></div><div class="stat-card"><span>Long-term realised P&amp;L</span><strong class="${tone(summary.longTerm)}">${money(summary.longTerm)}</strong></div><div class="stat-card"><span>Other realised P&amp;L</span><strong class="${tone(summary.unclassified)}">${money(summary.unclassified)}</strong></div></div>`:`<div class="stats compact"><div class="stat-card"><span>Realised P&amp;L</span><strong class="${tone(summary.realised)}">${money(summary.realised)}</strong></div><div class="stat-card"><span>Unrealised P&amp;L</span><strong class="${tone(summary.unrealised)}">${money(summary.unrealised)}</strong></div></div>`;
+  modal(`Review ${name} report`,`<div class="notice">This is a local broker-reference import. It will not create, change, or allocate diary lots.</div>${warnings.length?`<details><summary>${warnings.length} file note${warnings.length===1?'':'s'}</summary><ul>${warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></details>`:''}<p><b>${p.entries?.length||0} readable reference rows</b> · ${esc(p.period?.start&&p.period?.end?`${p.period.start} to ${p.period.end}`:'report period not identified')}</p>${categories}<div class="preview-list">${(p.entries||[]).slice(0,80).map(entry=>`<div class="preview-row"><div><b>${esc(entry.symbol)} · ${entry.type}</b><small>${entry.term.replace('-', ' ')} · ${entry.buyDate||entry.closingDate||'date not supplied'}${entry.sellDate?` → ${entry.sellDate}`:''}</small></div><b class="${tone(entry.pnl)}">${money(entry.pnl)}</b></div>`).join('')}${(p.entries||[]).length>80?'<p class="fine">Only the first 80 rows are shown here. All parsed reference rows will be saved locally.</p>':''}</div><button class="full" data-action="confirmimport" ${(p.entries||[]).length?'':'disabled'}>Save ${name} reference</button>`);
+}
 function importPreview() {
   const p = pending;
+  if(p.reference){referencePreview();return;}
   const warnings = (p.warnings || []).map((w) =>
     typeof w === "string" ? w : w.message || JSON.stringify(w),
   );
@@ -411,7 +431,17 @@ function importPreview() {
 }
 function confirmImport() {
   const p=pending,next=structuredClone(state);
-  if(!p||p.fatal||p.blockingErrors?.length)throw Error('This statement cannot be confirmed. Correct the source file and retry.');
+  if(!p)throw Error('Choose a statement first.');
+  if(p.reference){
+    if(!p.entries?.length)throw Error('No readable reference rows were found. Nothing was saved.');
+    const report={id:id(),kind:p.kind,importedAt:today(),period:p.period||{start:null,end:null},entries:p.entries};
+    const samePeriod=existing=>existing.kind===report.kind&&existing.period?.start===report.period?.start&&existing.period?.end===report.period?.end;
+    next.referenceReports=[...next.referenceReports.filter(existing=>!samePeriod(existing)),report];
+    next.imports.push({date:today(),kind:p.kind,count:p.entries.length});
+    next.onboarded=true;
+    commit(next);pending=null;close();notify(`${p.entries.length} ${p.kind==='pnl'?'P&L':'Capital Gains'} reference rows saved locally.`);return;
+  }
+  if(p.fatal||p.blockingErrors?.length)throw Error('This statement cannot be confirmed. Correct the source file and retry.');
   if($('#issues-confirm')&&!$('#issues-confirm').checked)throw Error('Review and acknowledge the excluded rows first.');
   let added=0,skipped=0,updated=0;
   if(p.transactions?.length){
@@ -462,6 +492,11 @@ document.addEventListener("click", (e) => {
     switch (el.dataset.action) {
       case "close":
         close();
+        break;
+      case "privacy":
+        if(demo){state={...state,privacyMode:!state.privacyMode};render();}
+        else commit({ ...state, privacyMode: !state.privacyMode });
+        notify(state.privacyMode ? 'Amounts hidden on this device.' : 'Amounts visible on this device.');
         break;
       case "buy":
         buyForm();
