@@ -1,5 +1,35 @@
 import { validateTransaction, analyse } from "./ledger.js";
 export const KEY = "lotbook.private.v1";
+const referenceNumber=(value,field)=>{
+ const number=Number(value);if(!Number.isFinite(number))throw Error(`Invalid ${field} in saved reference report.`);return number;
+};
+const referenceDate=value=>{
+ if(value===undefined||value===null||value==='')return null;
+ const text=String(value);if(!/^\d{4}-\d{2}-\d{2}$/.test(text))throw Error('Invalid date in saved reference report.');return text;
+};
+function validateReferenceReports(raw){
+ if(raw===undefined)return [];
+ if(!Array.isArray(raw)||raw.length>40)throw Error('Invalid saved reference reports.');
+ let total=0;
+ return raw.map(report=>{
+  if(!report||typeof report!=='object'||!['pnl','capital-gains'].includes(report.kind))throw Error('Invalid saved reference report.');
+  const entries=Array.isArray(report.entries)?report.entries:[];
+  total+=entries.length;if(total>20000)throw Error('Too many saved reference rows.');
+  const start=referenceDate(report.period?.start),end=referenceDate(report.period?.end);
+  if(start&&end&&start>end)throw Error('Invalid reference report period.');
+  return {id:String(report.id||'').slice(0,120),kind:report.kind,importedAt:referenceDate(report.importedAt)||'',period:{start,end},entries:entries.map(entry=>{
+   if(!entry||typeof entry!=='object')throw Error('Invalid saved reference entry.');
+   const type=entry.type==='unrealised'?'unrealised':entry.type==='realised'?'realised':null;
+   if(!type)throw Error('Invalid reference P&L type.');
+   const term=['short-term','long-term','unclassified'].includes(entry.term)?entry.term:'unclassified';
+   const next={symbol:String(entry.symbol||'').trim().slice(0,200),isin:String(entry.isin||'').trim().slice(0,200),kind:report.kind,type,term,sheet:String(entry.sheet||'').slice(0,120),sourceRow:referenceNumber(entry.sourceRow,'reference row'),pnl:referenceNumber(entry.pnl,'reference P&L')};
+   if(!next.symbol||!Number.isInteger(next.sourceRow)||next.sourceRow<1)throw Error('Invalid saved reference entry.');
+   for(const field of ['quantity','buyPrice','sellPrice','buyValue','sellValue'])if(entry[field]!==undefined){const value=referenceNumber(entry[field],field);if(field==='quantity'&&value<0)throw Error('Invalid reference quantity.');next[field]=value;}
+   for(const field of ['buyDate','sellDate','closingDate'])if(entry[field]!==undefined){const value=referenceDate(entry[field]);if(!value)throw Error('Invalid reference date.');next[field]=value;}
+   return next;
+  })};
+ });
+}
 const snapshotNumber=value=>{
  if(typeof value!=='number'&&!(typeof value==='string'&&value.trim()))throw Error('Invalid snapshot number.');
  const number=Number(value);if(!Number.isFinite(number)||number<0)throw Error('Invalid snapshot number.');return number;
@@ -15,7 +45,9 @@ export function fresh() {
     snapshotComplete: false,
     snapshotDate: '',
     cash: null,
+    privacyMode: false,
     imports: [],
+    referenceReports: [],
     notes: {},
   };
 }
@@ -61,6 +93,7 @@ export function validateBackup(raw) {
     raw.cash === null || raw.cash === undefined ? null : Number(raw.cash);
   if (state.cash !== null && (!Number.isFinite(state.cash) || state.cash < 0))
     throw Error("Invalid cash balance.");
+  state.privacyMode = raw.privacyMode === true;
   state.snapshots = (Array.isArray(raw.snapshots) ? raw.snapshots : [])
     .slice(-20000)
     .map((s) => ({
@@ -89,6 +122,7 @@ export function validateBackup(raw) {
       kind: String(i.kind || ""),
       count: Number(i.count) || 0,
     }));
+  state.referenceReports = validateReferenceReports(raw.referenceReports);
   state.notes = Object.fromEntries(
     Object.entries(raw.notes || {})
       .slice(-500)

@@ -203,6 +203,16 @@ header {
   gap: 10px;
   font-size: 12px;
 }
+.privacy-toggle {
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: #496455;
+  background: #f5f8f5;
+  border-color: #dce6df;
+  font-size: 10px;
+  font-weight: 600;
+}
+.privacy-toggle:hover { background: #e9f4ed; color: #136b58; }
 .avatar {
   width: 31px;
   height: 31px;
@@ -1260,10 +1270,31 @@ pre {
 .check-label input { width:auto; margin-top:3px; }
 .dialog details { margin:14px 0; }
 .dialog pre { max-width:100%; overflow:auto; white-space:pre-wrap; }
+.info-hero { display:flex; align-items:center; justify-content:space-between; gap:24px; background:linear-gradient(120deg,#eaf5ed,#fff); }
+.info-hero h2 { font-size:24px; margin:8px 0; }
+.info-hero p { max-width:690px; margin:0; }
+.report-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); border-top:1px solid #e8eee9; }
+.report-grid article { padding:21px; border-bottom:1px solid #e8eee9; }
+.report-grid article:nth-child(odd) { border-right:1px solid #e8eee9; }
+.report-grid article b { color:#27483a; font-size:13px; }
+.report-grid article p { margin:7px 0 0; font-size:12px; line-height:1.65; }
+.stats.compact { margin:0 0 18px; }
+.stats.compact .stat-card { min-height:auto; padding:19px; }
+.stats.compact .stat-card strong { font-size:23px; }
+.reference-list { border-top:1px solid #e8eee9; }
+.info-details { margin-top:20px; padding:15px 17px; border:1px solid #dbe8de; border-radius:10px; background:#fbfdfb; }
+.info-details summary { cursor:pointer; color:#315746; font-size:13px; font-weight:650; }
+.info-details p { margin:10px 0 0; font-size:12px; }
+.info-details a { color:#136b58; }
 @media (max-width: 600px) {
   #app-status .notice { align-items:stretch; flex-direction:column; }
   .overlay { padding:10px; }
   .dialog { width:min(100%, 720px); max-height:calc(100dvh - 20px); padding:20px 16px; overflow:auto; }
   .dialog .form-grid { grid-template-columns:1fr; }
   .preview-row,.history-row,.cycle-row,.kv { min-width:0; overflow-wrap:anywhere; }
+  .privacy-toggle span { display:none; }
+  .privacy-toggle { padding:7px 9px; }
+  .info-hero { align-items:flex-start; flex-direction:column; }
+  .report-grid { grid-template-columns:1fr; }
+  .report-grid article:nth-child(odd) { border-right:0; }
 }

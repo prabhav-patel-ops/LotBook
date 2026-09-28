@@ -104,7 +104,7 @@
   </head>
   <body>
     <main>
-      <div class="tag">LOTBOOK · PERSONAL MVP · 27 SEPTEMBER 2026</div>
+      <div class="tag">LOTBOOK · PERSONAL MVP · 28 SEPTEMBER 2026</div>
       <h1>Your shares.<br />Your trading story.</h1>
       <p>
         A private trading diary that separates core holdings from trading cycles
@@ -144,6 +144,10 @@
           holdings snapshot reconciliation.
         </li>
         <li>
+          Local P&amp;L and Capital Gains reference imports, an in-app Info tab,
+          and a Hide Amounts screen-privacy mode for public places.
+        </li>
+        <li>
           Validated JSON backup import/export, transaction CSV export,
           last-transaction undo, and explicit confirmation before clearing data.
         </li>
@@ -162,12 +166,23 @@
         they are absent from order history.
       </p>
       <p>
-        A P&amp;L summary or balance statement alone is insufficient to
-        reconstruct purchase lots. The app explains missing history and rejects
-        imports that would oversell a holding. If older purchases are
+        P&amp;L and Capital Gains statements can also be uploaded and are saved as
+        broker-reference data in the Info tab. They are not used to reconstruct
+        purchase lots. If older purchases are
         unavailable, explicitly record an opening lot with its known quantity
         and cost, using the note “opening balance”. Use matching stock
         identifiers across reports and manual entries.
+      </p>
+      <h2>P&amp;L and tax reference</h2>
+      <p>
+        The P&amp;L report can contain both realised and unrealised broker results.
+        The Capital Gains statement preserves Groww-labelled short-term and
+        long-term realised rows for each imported report period. These figures
+        are useful for review, but they do not replace the final capital-gains
+        computation in an ITR: eligibility, STT, other income, set-off and
+        carried-forward losses, surcharge, cess, residential status and any
+        grandfathering rules can matter. The Info tab links to the Income Tax
+        Department guidance and deliberately does not claim a final tax payable.
       </p>
       <p>
         Sources:
@@ -281,8 +296,9 @@
         available before that sale; the whole diary is replayed before saving.
         Same-day history uses execution time when every trade has one, otherwise
         it preserves report order. Missing fees remain unknown, not zero. The
-        current Groww Order History and Holding Statement formats were tested
-        locally; P&amp;L and Capital Gains summaries are rejected as trade sources.
+        current Groww Order History, Holding Statement, P&amp;L and Capital Gains
+        formats were tested locally. P&amp;L and Capital Gains are accepted as
+        reference reports but remain blocked from changing trade lots.
       </p>
       <p>
         Files are limited to 15 MB and parsed previews to 20,000 rows.
