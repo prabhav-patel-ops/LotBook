@@ -155,9 +155,9 @@
       <p>
         Start with <b>equity Order / Trade history</b> for every relevant
         period, ideally from the first purchase. In Groww, use Profile → Reports
-        → Transaction / Order history and export Excel or CSV. Next upload a
-        <b>current holdings snapshot</b> with stock, quantity and average
-        purchase price. A snapshot checks quantities; it does not invent
+        → Transactions, choose <b>Stocks Order History</b> and export Excel or
+        CSV. Next upload a <b>Stock Holding Statement</b> with stock and
+        quantity; broker average price is optional. A snapshot checks quantities; it does not invent
         historical trades. Contract notes help you enter actual charges when
         they are absent from order history.
       </p>
@@ -227,8 +227,9 @@
         </li>
         <li>
           Choose the right statement type, review parsed rows, choose
-          Core/Trading for each purchase, and confirm. Suspicious duplicates are
-          skipped; identical legitimate fills can be entered manually.
+          Core/Trading for each purchase, and confirm. Separate identical fills
+          are retained on first import; repeat uploads are matched by execution
+          identity or occurrence count and reviewed before saving.
         </li>
         <li>
           Tap a stock for every purchase lot and its remaining balance. Update
@@ -276,11 +277,12 @@
         order execution, dividend accounting, tax filing, corporate actions,
         transfer reconstruction, mutual funds, F&amp;O, margin or short-selling
         support. Imported sales initially use FIFO until specifically recorded
-        with a diary lot allocation. This version does not edit past sales; use
-        a clean import or undo the last transaction if a correction is needed.
-        Same-day history follows report row order. Fees are actual recorded
-        values, never estimates. Format support is tested on synthetic reports;
-        an actual redacted Groww export may require additional aliases.
+        with a diary lot allocation. Past sales can be rematched only to lots
+        available before that sale; the whole diary is replayed before saving.
+        Same-day history uses execution time when every trade has one, otherwise
+        it preserves report order. Missing fees remain unknown, not zero. The
+        current Groww Order History and Holding Statement formats were tested
+        locally; P&amp;L and Capital Gains summaries are rejected as trade sources.
       </p>
       <p>
         Files are limited to 15 MB and parsed previews to 20,000 rows.
@@ -293,9 +295,10 @@
       <p>
         The release is checked with accounting and importer tests, a production
         build, mobile-width layout checks, and browser flows for onboarding,
-        purchases, specific-lot sales and persistence. The user’s actual
-        statement format still needs a first-use reconciliation with Groww; no
-        personal financial file was used to create the repository.
+        purchases, cost corrections, past-sale lot matching and persistence.
+        A supplied local Groww report set was parsed without uploading or
+        committing it. Execution history replayed cleanly, current positions
+        reconciled, and a real missing-history difference was visibly reported.
       </p>
       <p>
         <a href="./">Open Lotbook →</a> ·

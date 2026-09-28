@@ -1,5 +1,9 @@
 import { validateTransaction, analyse } from "./ledger.js";
 export const KEY = "lotbook.private.v1";
+const snapshotNumber=value=>{
+ if(typeof value!=='number'&&!(typeof value==='string'&&value.trim()))throw Error('Invalid snapshot number.');
+ const number=Number(value);if(!Number.isFinite(number)||number<0)throw Error('Invalid snapshot number.');return number;
+};
 export function fresh() {
   return {
     version: 1,
@@ -8,6 +12,8 @@ export function fresh() {
     transactions: [],
     prices: {},
     snapshots: [],
+    snapshotComplete: false,
+    snapshotDate: '',
     cash: null,
     imports: [],
     notes: {},
@@ -24,12 +30,16 @@ export function validateBackup(raw) {
   const state = fresh();
   state.profile = String(raw.profile || "").slice(0, 60);
   state.onboarded = Boolean(raw.onboarded);
-  const ids = new Set();
+  const ids = new Set(), executions=[];
   state.transactions = raw.transactions.map((t) => {
     const v = validateTransaction(t);
     if (!v.id || ids.has(v.id))
       throw Error("Duplicate or missing transaction ID.");
     ids.add(v.id);
+    if(v.tradeId){
+      if(executions.some(t=>t.tradeId===v.tradeId&&t.date===v.date&&(!t.exchange||!v.exchange||t.exchange===v.exchange)))throw Error('Duplicate source trade execution in backup.');
+      executions.push(v);
+    }
     return v;
   });
   const result = analyse(state.transactions);
@@ -55,8 +65,9 @@ export function validateBackup(raw) {
     .slice(-20000)
     .map((s) => ({
       symbol: String(s.symbol || "").trim().toUpperCase(),
-      quantity: Number(s.quantity),
-      averageCost: Number(s.averageCost || s.price || 0),
+      quantity: snapshotNumber(s.quantity),
+      averageCost: s.averageCost===null||s.averageCost===undefined&&s.price===undefined ? null : snapshotNumber(s.averageCost??s.price),
+      isin: String(s.isin||'').slice(0,200),
     }));
   if (
     state.snapshots.some(
@@ -64,11 +75,13 @@ export function validateBackup(raw) {
         !s.symbol ||
         !Number.isFinite(s.quantity) ||
         s.quantity < 0 ||
-        !Number.isFinite(s.averageCost) ||
-        s.averageCost < 0,
+        s.averageCost!==null&&(!Number.isFinite(s.averageCost) || s.averageCost < 0),
     )
   )
     throw Error("Invalid holdings snapshot.");
+  if(new Set(state.snapshots.map(s=>s.symbol)).size!==state.snapshots.length)throw Error('Duplicate stock in holdings snapshot. Combine rows before restoring.');
+  state.snapshotComplete=raw.snapshotComplete===true;
+  state.snapshotDate=String(raw.snapshotDate||'').slice(0,10);
   state.imports = (Array.isArray(raw.imports) ? raw.imports : [])
     .slice(-100)
     .map((i) => ({
@@ -95,4 +108,8 @@ export function save(state) {
       "This diary is too large for local storage. Export a backup before adding more records.",
     );
   localStorage.setItem(KEY, text);
+}
+export function saveIfUnchanged(state, expectedRaw) {
+  if(localStorage.getItem(KEY)!==expectedRaw)throw Error('This diary changed in another tab. Refresh to load the latest saved data before making changes.');
+  save(state);
 }

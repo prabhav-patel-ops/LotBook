@@ -57,7 +57,13 @@ export function validateTransaction(t) {
     quantity: number(t.quantity, 'quantity', true), price: number(t.price, 'price', true),
     charges: number(t.charges === undefined ? 0 : t.charges, 'charges'),
     purpose: t.purpose, note: t.note ?? '',
+    // Old zero placeholders do not establish that the broker charged nothing.
+    chargesKnown: typeof t.chargesKnown==='boolean' ? t.chargesKnown : Number(t.charges)>0,
   };
+  for (const field of ['isin','exchange','orderId','exchangeOrderId','tradeId']) {
+    if(t[field]!==undefined){if(typeof t[field]!=='string'||t[field].length>200)throw Error(`Invalid ${field}`);normalized[field]=t[field].trim();}
+  }
+  if(t.tradeTime){if(typeof t.tradeTime!=='string'||!/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(t.tradeTime))throw Error('Invalid execution time');normalized.tradeTime=t.tradeTime;}
   finite(normalized.quantity * normalized.price + normalized.charges);
   finite(normalized.price + normalized.charges / normalized.quantity);
   if (t.allocations !== undefined) {
@@ -102,6 +108,17 @@ function selectLots(t, lots, explicit) {
   return selected;
 }
 
+export function orderedTransactions(transactions) {
+ const dateGroups=new Map();
+ transactions.forEach((t,index)=>{if(!dateGroups.has(t.date))dateGroups.set(t.date,[]);dateGroups.get(t.date).push({t,index});});
+ const ordered=[];
+ for(const [,entries] of [...dateGroups].sort(([a],[b])=>a.localeCompare(b))){
+  if(entries.every(e=>e.t.tradeTime))entries.sort((a,b)=>a.t.tradeTime.localeCompare(b.t.tradeTime)||a.index-b.index);
+  ordered.push(...entries.map(e=>e.t));
+ }
+ return ordered;
+}
+
 function calculate(t, selected) {
   return selected.map(({ lot, quantity }) => {
     const gross = finite((t.price - lot.price) * quantity);
@@ -111,6 +128,7 @@ function calculate(t, selected) {
       id: JSON.stringify([t.id, lot.id]), sellId: t.id, lotId: lot.id, symbol: t.symbol,
       buyDate: lot.date, sellDate: t.date, quantity, buyPrice: lot.price, sellPrice: t.price,
       gross, charges, net: finite(gross - charges), purpose: lot.purpose,
+      chargesKnown: t.chargesKnown && lot.chargesKnown,
       holdingDays: Math.round((Date.parse(`${t.date}T00:00:00Z`) - Date.parse(`${lot.date}T00:00:00Z`)) / 86400000),
     };
   });
@@ -135,13 +153,12 @@ export function analyse(transactions, prices = {}) {
   if (!Array.isArray(transactions)) throw new Error('transactions must be an array');
   const errors = [], valid = [], lots = [], fifoLots = [], rawCycles = [];
   const ids = new Set();
-  let charges = 0, realizedGross = 0, realizedNet = 0, fifoNet = 0;
+  let charges = 0, realizedGross = 0, realizedNet = 0, fifoNet = 0, unknownCharges=0;
   transactions.forEach((raw, index) => {
     try { valid.push({ t: validateTransaction(raw), index }); }
     catch (error) { errors.push({ id: raw?.id ?? null, message: error.message }); }
   });
-  valid.sort((a, b) => a.t.date.localeCompare(b.t.date) || a.index - b.index);
-  for (const { t } of valid) {
+  for (const t of orderedTransactions(valid.map(entry=>entry.t))) {
     try {
       if (ids.has(t.id)) throw new Error(`Duplicate transaction id ${t.id}`);
       const nextCharges = finite(charges + t.charges);
@@ -167,6 +184,7 @@ export function analyse(transactions, prices = {}) {
         fifoNet = nextFifo;
       }
       charges = nextCharges;
+      if(!t.chargesKnown)unknownCharges++;
       ids.add(t.id);
     } catch (error) { errors.push({ id: t.id, message: error.message }); }
   }
@@ -214,6 +232,6 @@ export function analyse(transactions, prices = {}) {
     holdings, cycles, monthlyResults, errors,
     totals: { invested: money(invested), currentValue: money(currentValue), unrealized: money(unrealized),
       realizedGross: money(realizedGross), charges: money(charges), realizedNet: money(realizedNet), fifoNet: money(fifoNet),
-      cycles: cycles.length, wins: cycles.filter(c => c.net > 0).length, losses: cycles.filter(c => c.net < 0).length, unpriced },
+      cycles: cycles.length, wins: cycles.filter(c => c.net > 0).length, losses: cycles.filter(c => c.net < 0).length, unpriced, unknownCharges },
   };
 }
