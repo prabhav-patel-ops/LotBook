@@ -1,0 +1,9 @@
+Name,Synthetic Investor
+UniqueClientCode,SYNTH-CLIENT-001
+Orderhistory
+
+Stock name,Symbol,ISIN,Type,Quantity,Value,Exchange,Exchange Order Id,Execution date
+"Aster, Laboratories Limited",ASTER,INE000S01001,BUY,4,"₹ 1,000.00",NSE,000000100001,03-04-2026 09:15:32
+"Aster, Laboratories Limited",ASTER,INE000S01001,BUY,4,"₹ 1,000.00",NSE,000000100002,03-04-2026 09:15:32
+"Aster, Laboratories Limited",ASTER,INE000S01001,SELL,2,540,NSE,000000100003,04-04-2026
+Unsupported Distribution,UNSUPPORTED,INE000S01002,DIVIDEND,1,120,NSE,000000100004,05-04-2026

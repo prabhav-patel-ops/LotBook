@@ -12,7 +12,7 @@ test('Groww preamble, synonyms, footer, Indian numbers and sell trades', () => {
     ['Total', '', '', '', '1,24,706', '', '1247'], ['Disclaimer: for reference']]);
   assert.equal(result.mappingRequired, false);
   assert.equal(result.transactions.length, 2);
-  assert.deepEqual(result.transactions[0], { symbol: 'RELIANCE', isin: 'INE002A01018', date: '2026-04-03', side: 'BUY', quantity: 1250, price: 1234.5, charges: 12.5, purpose: 'core' });
+  assert.deepEqual(result.transactions[0], { symbol: 'RELIANCE', isin: 'INE002A01018', date: '2026-04-03', side: 'BUY', quantity: 1250, price: 1234.5, charges: 12.5, purpose: 'core', sourceRow: 5, chargesKnown: true, priceSource: 'unit-price', tradeTime: '' });
   assert.equal(result.transactions[1].quantity, 123456);
   assert.equal(result.transactions[1].side, 'SELL');
   assert.deepEqual(result.headers, headers);
@@ -90,10 +90,11 @@ test('preview can be remapped using names and mixed index assignments', () => {
   assert.equal(invalidMapping.transactions.length, 0);
 });
 
-test('holdings require quantity and average cost and never use trade total as cost', () => {
+test('holdings require quantity, retain missing average cost as null and never use total as cost', () => {
   const missing = parseRows([['Symbol', 'Quantity', 'Total'], ['ABC', 2, 100]], 'holdings');
-  assert.equal(missing.mappingRequired, true);
-  assert.deepEqual(missing.holdings, []);
+  assert.equal(missing.mappingRequired, false);
+  assert.deepEqual(missing.holdings, [{ symbol: 'ABC', isin: '', quantity: 2, avgPrice: null }]);
+  assert.ok(missing.warnings.some(warning => warning.includes('cost is unknown')));
   const invalid = parseRows([['Symbol', 'Qty', 'Avg. price'], ['ABC', 0, 50], ['ABC', 2, 'bad'], ['ABC', 2, 50]], 'holdings');
   assert.equal(invalid.holdings.length, 1);
   assert.equal(invalid.transactions.length, 0);
@@ -135,10 +136,10 @@ test('partially filled orders use only explicit positive trade quantity, includi
     [...trade, 'Cancelled', 3, '09:16:01'], [...trade, 'Rejected', 3, '09:16:02'],
     [...trade, 'Partially Filled', '', ''], [...trade, 'Partially Filled', 'bad', ''], [...trade, 'Partially Filled', 0, '']];
   const result = parseRows(rows);
-  assert.deepEqual(result.transactions.map(row => row.quantity), [5, 8]);
+  assert.deepEqual(result.transactions.map(row => row.quantity), [5, 8, 3]);
   assert.equal(result.transactions[0].tradeTime, '09:15:32');
   const remapped = parseRows([result.headers, ...result.rows], 'trades', { symbol: 0, date: 2, side: 3, quantity: 4, price: 5, charges: 6 });
-  assert.deepEqual(remapped.transactions.map(row => row.quantity), [5, 8]);
+  assert.deepEqual(remapped.transactions.map(row => row.quantity), [5, 8, 3]);
   assert.ok(result.warnings.some(warning => warning.includes('partially filled status without valid trade quantity')));
 });
 
@@ -163,7 +164,8 @@ test('numeric preview mappings and a status-only recognised header retain safety
   const generic = parseRows([['ABC', '02/03/2026', 'Buy', 10, 20]]);
   const genericMapped = parseRows([generic.headers, ...generic.rows], 'trades', mapping);
   assert.equal(genericMapped.transactions.length, 1);
-  assert.deepEqual(genericMapped.warnings, []);
+  assert.equal(genericMapped.transactions[0].chargesKnown, false);
+  assert.ok(genericMapped.warnings.some(warning => warning.includes('Fees are unknown')));
 });
 
 test('holdings avgPrice headers and mappings are supported without applying order status', () => {
@@ -267,4 +269,363 @@ test('PDF text preview returns joined text and never requests table mapping', as
   assert.deepEqual(result.transactions, []);
   assert.deepEqual(result.holdings, []);
   assert.ok(result.warnings.some(warning => warning.includes('preview only')));
+});
+
+const orderHeaders = ['Stock name', 'Symbol', 'ISIN', 'Type', 'Quantity', 'Value', 'Exchange', 'Exchange Order Id', 'Execution date'];
+const orderRow = ['Synthetic Components Ltd', 'SYNCOMP', 'INE000S01003', 'BUY', 4, 1000, 'NSE', '000012345678901234567890', '03-04-2026 09:15:32'];
+
+test('strict dash dates and timestamps validate calendar, clock and timezone without guessing', () => {
+  for (const text of ['03-04-2026', '03-04-2026 09:15', '03-04-2026 09:15:32', '03/04/2026 9:15:32 AM', '2026-04-03 09:15:32', '2026-04-03T09:15:32.123+05:30']) {
+    assert.equal(normalizeDate(text), '2026-04-03', text);
+  }
+  for (const text of ['04-13-2026', '31-04-2026', '29-02-2025', '03-04/2026', '03-04-26', '03-04-2026 garbage', '03-04-2026 24:00:00', '03-04-2026 09:60:00', '03-04-2026 00:15 AM', '2026-04-03T09:15:32+14:01']) {
+    assert.equal(normalizeDate(text), null, text);
+  }
+  const timestamp = parseRows([orderHeaders, orderRow]).transactions[0];
+  assert.equal(timestamp.tradeTime, '09:15:32');
+  assert.equal(timestamp.executionDateTime, '2026-04-03T09:15:32');
+  const dateOnly = parseRows([orderHeaders, orderRow.map((cell, index) => index === 8 ? '03-04-2026' : cell)]).transactions[0];
+  assert.equal(dateOnly.tradeTime, '');
+  assert.equal(dateOnly.executionDateTime, undefined);
+});
+
+test('synthetic Groww CSV keeps Symbol, gross Value, metadata, row provenance and separate identical fills', async context => {
+  if (!await dependency('papaparse', context)) return;
+  const bytes = await readFile(new URL('./fixtures/groww-order-history-synthetic.csv', import.meta.url));
+  const result = await parseStatement(new File([bytes], 'groww-order-history.csv'));
+  assert.equal(result.fatal, false, result.blockingErrors.join('\n'));
+  assert.equal(result.mappingRequired, false, result.warnings.join('\n'));
+  assert.equal(result.transactions.length, 3);
+  assert.equal(result.headerRow, 5);
+  assert.deepEqual(result.metadataRows.slice(0, 3), [['Name', 'Synthetic Investor'], ['UniqueClientCode', 'SYNTH-CLIENT-001'], ['Orderhistory']]);
+  assert.equal(result.columns.symbol, 1);
+  assert.equal(result.columns.name, 0);
+  assert.equal(result.columns.tradeValue, 5);
+  assert.equal(result.columns.price, undefined);
+  assert.deepEqual(result.transactions.map(row => row.sourceRow), [6, 7, 8]);
+  assert.deepEqual(result.transactions.map(row => row.price), [250, 250, 270]);
+  assert.deepEqual(result.transactions.map(row => row.tradeValue), [1000, 1000, 540]);
+  assert.equal(result.transactions[0].name, 'Aster, Laboratories Limited');
+  assert.equal(result.transactions[0].symbol, 'ASTER');
+  assert.equal(result.transactions[0].isin, 'INE000S01001');
+  assert.equal(result.transactions[0].exchange, 'NSE');
+  assert.deepEqual(result.transactions.map(row => row.exchangeOrderId), ['000000100001', '000000100002', '000000100003']);
+  assert.ok(result.transactions.every(row => row.orderId === undefined));
+  assert.ok(result.transactions.every(row => row.chargesKnown === false && row.charges === 0 && row.priceSource === 'trade-value'));
+  assert.ok(result.warnings.some(warning => warning.includes('unknown, not confirmed zero')));
+  assert.equal(result.sourceRows.length, 4);
+  assert.equal(result.rowIssues.length, 1);
+  assert.equal(result.rowIssues[0].sourceRow, 9);
+  assert.equal(result.rowIssues[0].code, 'invalid-row');
+  assert.ok(result.rowIssues[0].reasons.includes('buy/sell side'));
+  assert.deepEqual(result.blockingErrors, []);
+  const again = parseRows(result, 'trades', { tradeValue: 'Value' });
+  assert.deepEqual(again.transactions, result.transactions);
+});
+
+test('unit price has precedence only when valid and gross Value must reconcile to executed quantity', () => {
+  const result = parseRows([[...orderHeaders, 'Price', 'Charges'], [...orderRow, 250, 2], [...orderRow, '', 0], [...orderRow, 200, 0], [...orderRow, 'bad', 0]]);
+  assert.equal(result.transactions.length, 2);
+  assert.deepEqual(result.transactions.map(row => row.priceSource), ['unit-price', 'trade-value']);
+  assert.ok(result.transactions.every(row => row.chargesKnown));
+  assert.equal(result.transactions[1].charges, 0);
+  assert.ok(result.rowIssues[0].reasons.includes('conflicting price/value'));
+  assert.ok(result.rowIssues[1].reasons.includes('price'));
+  const rounded = parseRows([[...orderHeaders, 'Price'], [...orderRow.map((cell, index) => index === 5 ? 999.9999999999999 : cell), 250]]);
+  assert.equal(rounded.transactions.length, 1);
+  const minorConflict = parseRows([[...orderHeaders, 'Price'], [...orderRow.map((cell, index) => index === 5 ? 1000.01 : cell), 250]]);
+  assert.equal(minorConflict.transactions.length, 0);
+});
+
+test('value/price mapping aliases work and holdings market Value never becomes acquisition cost', () => {
+  const custom = [['Instrument', 'When', 'Action', 'Units', 'Consideration'], ['SYNCOMP', '03-04-2026', 'BUY', 4, 1000]];
+  for (const mappedField of ['tradeValue', 'value']) {
+    const result = parseRows(custom, 'trades', { symbol: 0, date: 1, side: 2, quantity: 3, [mappedField]: 4 });
+    assert.equal(result.transactions[0].price, 250, mappedField);
+    assert.equal(result.transactions[0].tradeValue, 1000);
+    assert.equal(result.columns.tradeValue, 4);
+  }
+  const missing = parseRows([['Stock name', 'Symbol', 'Quantity', 'Value'], ['Synthetic Components Ltd', 'SYNCOMP', 4, 1000]], 'holdings');
+  assert.equal(missing.mappingRequired, false);
+  assert.deepEqual(missing.holdings, [{ symbol: 'SYNCOMP', isin: '', quantity: 4, avgPrice: null, name: 'Synthetic Components Ltd' }]);
+  const unsafeMapping = parseRows([missing.headers, ...missing.rows], 'holdings', { price: 'Value' });
+  assert.deepEqual(unsafeMapping.holdings, missing.holdings);
+  const priced = parseRows([['Stock name', 'Symbol', 'Qty', 'Value', 'Average buy price'], ['Synthetic Components Ltd', 'SYNCOMP', 4, 1500, 250]], 'holdings');
+  assert.deepEqual(priced.holdings, [{ symbol: 'SYNCOMP', isin: '', quantity: 4, avgPrice: 250, name: 'Synthetic Components Ltd' }]);
+});
+
+test('partial fills with total Value require explicit executed quantity and keep status safeguards after mapping', () => {
+  const data = [[...orderHeaders, 'Executed Quantity', 'Order Status', 'Order Id', 'Trade Id'],
+    [...orderRow.map((cell, index) => index === 4 ? 100 : index === 5 ? 500 : cell), 2, 'Partially Filled', '0012', '00031'],
+    [...orderRow, '', 'Partially Filled', '0013', '00032'],
+    [...orderRow, 0, 'Partially Filled', '0014', '00033'],
+    [...orderRow, 4, 'Rejected', '0015', '00034'],
+    [...orderRow, 4, '', '0016', '00035']];
+  const result = parseRows(data);
+  assert.equal(result.transactions.length, 1);
+  assert.equal(result.transactions[0].quantity, 2);
+  assert.equal(result.transactions[0].price, 250);
+  assert.equal(result.transactions[0].orderId, '0012');
+  assert.equal(result.transactions[0].tradeId, '00031');
+  assert.equal(result.rowIssues.length, 4);
+  const remapped = parseRows(result, 'trades', { quantity: 'Quantity', tradeValue: 'Value' });
+  assert.equal(remapped.transactions.length, 1);
+  assert.equal(remapped.transactions[0].quantity, 2);
+  const noExecutedQuantity = parseRows([[...orderHeaders, 'Status'], [...orderRow, 'Partially Filled']]);
+  assert.equal(noExecutedQuantity.transactions.length, 0);
+});
+
+test('invalid/nonfinite/negative/zero Value or unit price and numeric overflow are never guessed', () => {
+  for (const value of [0, -1, NaN, Infinity, -Infinity, 'NaN', 'Infinity', '12junk', '1,2,3', '']) {
+    const result = parseRows([orderHeaders, orderRow.map((cell, index) => index === 5 ? value : cell)]);
+    assert.equal(result.transactions.length, 0, String(value));
+    assert.equal(result.rowIssues[0].code, 'invalid-row');
+  }
+  for (const price of [0, -1, NaN, Infinity, 'bad']) {
+    const result = parseRows([[...orderHeaders, 'Price'], [...orderRow, price]]);
+    assert.equal(result.transactions.length, 0, String(price));
+  }
+  const overflow = parseRows([headers, ['SYNCOMP', '', '03-04-2026', 'BUY', 2, 1e308, 0]]);
+  assert.equal(overflow.transactions.length, 0);
+  const underflow = parseRows([orderHeaders, orderRow.map((cell, index) => index === 4 ? 1e308 : index === 5 ? Number.MIN_VALUE : cell)]);
+  assert.equal(underflow.transactions.length, 0);
+});
+
+test('conflicting duplicate price/value headers cannot bypass reconciliation by manual mapping', () => {
+  for (const extra of [['Trade Value', 900], ['Trade Price', 200]]) {
+    const result = parseRows([[...orderHeaders, 'Price', extra[0]], [...orderRow, 250, extra[1]]], 'trades', { price: 'Price', tradeValue: 'Value' });
+    assert.equal(result.transactions.length, 0, extra[0]);
+    assert.ok(result.rowIssues[0].reasons.some(reason => reason.includes('conflicting')));
+  }
+});
+
+test('fees are known only for a supplied valid fee including explicit zero', () => {
+  const result = parseRows([[...orderHeaders, 'Charges'], [...orderRow, ''], [...orderRow, 0], [...orderRow, 2.5], [...orderRow, 'bad'], [...orderRow, -1]]);
+  assert.deepEqual(result.transactions.map(row => row.chargesKnown), [false, true, true]);
+  assert.deepEqual(result.transactions.map(row => row.charges), [0, 0, 2.5]);
+  assert.equal(result.rowIssues.length, 2);
+  assert.ok(result.warnings.some(warning => warning.includes('1 imported trade')));
+});
+
+test('source rows include blank gaps and unsupported records; ticker-like footers are never dropped', () => {
+  const result = parseRows([['Name', 'Synthetic Investor'], [], orderHeaders, [], orderRow,
+    ['Notes Limited', 'NOTE', '', 'BUY', 4, 1000, 'NSE', 'one', '03-04-2026'],
+    ['Total Components Ltd', 'TOTAL', '', 'BUY', 4, 1000, 'NSE', 'two', '03-04-2026'],
+    ['Unsupported', 'OTHER', '', 'Split', 4, 1000, 'NSE', 'three', '03-04-2026'], orderHeaders, ['Disclaimer: synthetic only']]);
+  assert.deepEqual(result.transactions.map(row => row.sourceRow), [5, 6, 7]);
+  assert.deepEqual(result.rowIssues.map(issue => [issue.sourceRow, issue.code]), [[8, 'invalid-row'], [9, 'repeated-header'], [10, 'footer']]);
+  assert.equal(result.rows.length, 6);
+  assert.equal(result.sourceRows.length, 6);
+});
+
+test('stable text identifiers keep leading zeros and long IDs; lossy Excel numeric IDs are rejected', () => {
+  const good = parseRows([orderHeaders, orderRow]).transactions[0];
+  assert.equal(good.exchangeOrderId, '000012345678901234567890');
+  const bad = parseRows([orderHeaders, orderRow.map((cell, index) => index === 7 ? 12345678901234567890 : cell)]);
+  assert.equal(bad.transactions.length, 0);
+  assert.ok(bad.rowIssues[0].reasons.some(reason => reason.includes('unsafe exchangeOrderId')));
+});
+
+test('actual times normalize to HH:mm:ss; missing/invalid/conflicting optional clocks remain unknown', () => {
+  const dateOnly = orderRow.map((cell, index) => index === 8 ? '03-04-2026' : cell);
+  const result = parseRows([[...orderHeaders, 'Trade Time'], [...dateOnly, '9:15 AM'], [...dateOnly, '09:15:32.125+05:30'], [...dateOnly, ''], [...dateOnly, '24:00:00'], [...orderRow, '10:15:32']]);
+  assert.deepEqual(result.transactions.map(row => row.tradeTime), ['09:15:00', '09:15:32', '', '', '']);
+  assert.equal(result.transactions[1].executionDateTime, '2026-04-03T09:15:32.125+05:30');
+  assert.equal(result.rowIssues.length, 2);
+  assert.ok(result.rowIssues.every(issue => issue.code === 'unknown-time'));
+  assert.ok(result.warnings.some(warning => warning.includes('Execution time is unknown')));
+  assert.equal(result.transactions[4].executionDateTime, undefined);
+});
+
+test('malformed CSV is fatal and both preview remapping paths remain blocked', async context => {
+  if (!await dependency('papaparse', context)) return;
+  const text = 'Symbol,Date,Side,Quantity,Price\n"BROKEN,03-04-2026,BUY,2,10\n';
+  const result = await parseStatement(new File([text], 'broken.csv'));
+  assert.equal(result.fatal, true);
+  assert.equal(result.mappingRequired, false);
+  assert.deepEqual(result.transactions, []);
+  assert.ok(result.blockingErrors.some(error => error.includes('Malformed CSV')));
+  const mapping = { symbol: 0, date: 1, side: 2, quantity: 3, price: 4 };
+  for (const input of [result, [result.headers, ...result.rows]]) {
+    const remapped = parseRows(input, 'trades', mapping);
+    assert.equal(remapped.fatal, true);
+    assert.deepEqual(remapped.transactions, []);
+    assert.ok(remapped.blockingErrors.length);
+  }
+});
+
+test('extra CSV columns are retained as rejected rows instead of shifted or silently imported', async context => {
+  if (!await dependency('papaparse', context)) return;
+  const text = 'Symbol,Date,Side,Quantity,Price\nSYNCOMP,03-04-2026,BUY,2,10,unexpected\nSYNCOMP,03-04-2026,BUY,2,10\n';
+  const result = await parseStatement(new File([text], 'extra-column.csv'));
+  assert.equal(result.transactions.length, 1);
+  assert.equal(result.rowIssues.length, 1);
+  assert.ok(result.rowIssues[0].reasons.includes('unexpected extra columns'));
+  assert.equal(result.rowIssues[0].row[5], 'unexpected');
+});
+
+test('generated real XLSX bytes handle Groww metadata, typed total Value, dates, IDs, times and omitted sheets', async context => {
+  const XLSX = await dependency('xlsx', context);
+  if (!XLSX) return;
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Disclaimer'], ['Synthetic workbook for importer tests']]), 'Notes');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([[], ['Name', 'Synthetic Investor'], ['UniqueClientCode', 'SYNTH-XLSX-001'], ['Orderhistory'], [],
+    [...orderHeaders, 'Executed Quantity', 'Status', 'Order Id', 'Trade Id', 'Charges'],
+    [...orderRow.map((cell, index) => index === 4 ? 20 : index === 5 ? 500 : index === 8 ? 45292.5 : cell), 2, 'Partially filled', '001', 'TRADE-001', ''],
+    [...orderRow, 4, 'Executed', '002', 'TRADE-002', 0], [...orderRow, 4, 'Rejected', '003', 'TRADE-003', 0]]), 'Groww history');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([orderHeaders, orderRow]), 'Other trades');
+  const bytes = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+  const file = new File([bytes], 'synthetic-groww.xlsx');
+  const result = await parseStatement(file);
+  assert.equal(result.selectedSheet, 'Groww history');
+  assert.equal(result.transactions.length, 2, result.warnings.join('\n'));
+  assert.equal(result.headerRow, 6);
+  assert.deepEqual(result.transactions.map(row => row.sourceRow), [7, 8]);
+  assert.equal(result.transactions[0].price, 250);
+  assert.equal(result.transactions[0].tradeValue, 500);
+  assert.equal(result.transactions[0].date, '2024-01-01');
+  assert.equal(result.transactions[0].tradeTime, '12:00:00');
+  assert.equal(result.transactions[0].chargesKnown, false);
+  assert.equal(result.transactions[1].chargesKnown, true);
+  assert.equal(result.transactions[0].orderId, '001');
+  assert.equal(result.transactions[0].tradeId, 'TRADE-001');
+  assert.equal(result.transactions[0].exchangeOrderId, '000012345678901234567890');
+  assert.equal(result.columns.quantity, 9);
+  assert.equal(result.columns.tradeValue, 5);
+  assert.deepEqual(result.worksheets.map(sheet => [sheet.name, sheet.validCount, sheet.invalidCount, sheet.selected]), [['Notes', 0, 0, false], ['Groww history', 2, 1, true], ['Other trades', 1, 0, false]]);
+  assert.ok(result.warnings.some(warning => warning.includes('Other worksheets were not imported') && warning.includes('Other trades')));
+  const explicit = await parseStatement(file, 'trades', { sheetName: 'Other trades' });
+  assert.equal(explicit.selectedSheet, 'Other trades');
+  assert.equal(explicit.transactions.length, 1);
+  const absent = await parseStatement(file, 'trades', { sheetName: 'Absent' });
+  assert.equal(absent.fatal, true);
+});
+
+test('generated XLSX hidden sheets are excluded from automatic selection and ties use workbook order', async context => {
+  const XLSX = await dependency('xlsx', context);
+  if (!XLSX) return;
+  const workbook = XLSX.utils.book_new();
+  for (const [name, count] of [['Hidden orders', 3], ['Visible first', 1], ['Visible second', 1]]) XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([orderHeaders, ...Array.from({ length: count }, () => orderRow)]), name);
+  workbook.Workbook = { Sheets: [{ Hidden: 1 }, { Hidden: 0 }, { Hidden: 0 }] };
+  const bytes = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+  const file = new File([bytes], 'hidden.xlsx');
+  const automatic = await parseStatement(file);
+  assert.equal(automatic.selectedSheet, 'Visible first');
+  assert.equal(automatic.worksheets[0].hidden, true);
+  assert.equal(automatic.worksheets[0].validCount, 3);
+  const explicit = await parseStatement(file, 'trades', { sheetName: 'Hidden orders' });
+  assert.equal(explicit.selectedSheet, 'Hidden orders');
+  assert.equal(explicit.transactions.length, 3);
+});
+
+test('overlapping numeric mappings block import and known gross aliases cannot become unit price', () => {
+  const overlapping = parseRows([headers, trade], 'trades', { quantity: 'Trade Price' });
+  assert.equal(overlapping.mappingRequired, true);
+  assert.deepEqual(overlapping.transactions, []);
+  assert.ok(overlapping.blockingErrors.some(error => error.includes('distinct columns')));
+  const gross = parseRows([['Symbol', 'Execution date', 'Type', 'Quantity', 'Executed Value'], ['SYNCOMP', '03-04-2026', 'BUY', 4, 1000]], 'trades', { price: 'Executed Value' });
+  assert.equal(gross.transactions[0].price, 250);
+  assert.equal(gross.transactions[0].priceSource, 'trade-value');
+  assert.equal(gross.columns.price, undefined);
+});
+
+test('TSV and object rows retain actual fees, identifiers, and optional fields absent from first object', async context => {
+  if (!await dependency('papaparse', context)) return;
+  const text = 'Symbol\tExecution date\tType\tQuantity\tValue\tFees\tTrade Id\tTrade Time\nSYNCOMP\t03-04-2026\tBUY\t4\t1,000.00\t0\t000031\t00:00:00\n';
+  const tsv = await parseStatement(new File([text], 'synthetic.tsv'));
+  assert.equal(tsv.transactions.length, 1, tsv.warnings.join('\n'));
+  assert.equal(tsv.transactions[0].chargesKnown, true);
+  assert.equal(tsv.transactions[0].tradeId, '000031');
+  assert.equal(tsv.transactions[0].tradeTime, '00:00:00');
+  const objects = parseRows([{ Symbol: 'SYNCOMP', Date: '03-04-2026', Type: 'BUY', Quantity: 4, Value: 1000 },
+    { Symbol: 'SYNCOMP', Date: '03-04-2026', Type: 'BUY', Quantity: 4, Value: 1000, Fees: 2, 'Trade Id': '000032', 'Company Name': 'Synthetic Components Ltd' }]);
+  assert.equal(objects.transactions[0].chargesKnown, false);
+  assert.equal(objects.transactions[1].chargesKnown, true);
+  assert.equal(objects.transactions[1].tradeId, '000032');
+  assert.equal(objects.transactions[1].name, 'Synthetic Components Ltd');
+});
+
+test('quantity-only holdings keep null average acquisition price and reject invalid supplied costs', () => {
+  const result = parseRows([['Stock name', 'Symbol', 'ISIN', 'Quantity', 'Holding Value', 'Exchange'],
+    ['Synthetic Components Ltd', 'SYNCOMP', 'INE000S01003', 4, 1500, 'NSE']], 'holdings');
+  assert.equal(result.mappingRequired, false);
+  assert.deepEqual(result.holdings, [{ symbol: 'SYNCOMP', isin: 'INE000S01003', quantity: 4, avgPrice: null, name: 'Synthetic Components Ltd', exchange: 'NSE' }]);
+  assert.deepEqual(result.transactions, []);
+  assert.deepEqual(result.blockingErrors, []);
+  assert.ok(result.warnings.some(warning => warning.includes('avgPrice=null')));
+  const costs = parseRows([['Symbol', 'Quantity', 'Average Buy Price'], ['SYNCOMP', 4, ''], ['SYNCOMP', 4, 250], ['SYNCOMP', 4, 0], ['SYNCOMP', 4, -1], ['SYNCOMP', 4, NaN], ['SYNCOMP', 4, Infinity]], 'holdings');
+  assert.deepEqual(costs.holdings.map(row => row.avgPrice), [null, 250]);
+  assert.equal(costs.rowIssues.filter(issue => issue.code === 'invalid-row').length, 4);
+});
+
+test('generated XLSX holdings can omit average acquisition cost and retain quantity-only snapshots', async context => {
+  const XLSX = await dependency('xlsx', context);
+  if (!XLSX) return;
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Holdings'], ['Stock name', 'Symbol', 'ISIN', 'Quantity', 'Value'], ['Synthetic Components Ltd', 'SYNCOMP', 'INE000S01003', 4, 1500]]), 'Current holdings');
+  const bytes = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+  const result = await parseStatement(new File([bytes], 'holdings.xlsx'), 'holdings');
+  assert.equal(result.selectedSheet, 'Current holdings');
+  assert.equal(result.mappingRequired, false);
+  assert.equal(result.holdings.length, 1);
+  assert.equal(result.holdings[0].avgPrice, null);
+  assert.equal(result.holdings[0].quantity, 4);
+  assert.equal(result.holdings[0].symbol, 'SYNCOMP');
+  assert.ok(result.warnings.some(warning => warning.includes('cost is unknown')));
+});
+
+test('current Groww execution date-time header and exchange order ID map without collision', () => {
+  const result = parseRows([
+    ['Stock name', 'Symbol', 'ISIN', 'Type', 'Quantity', 'Value', 'Exchange', 'Exchange Order Id', 'Execution date and time', 'Order status'],
+    ['Synthetic Components Ltd', 'SYNCOMP', 'INE000S01003', 'BUY', 4, 1000, 'NSE', '000012345678901234567890', '01-01-2026 09:15:30', 'Executed'],
+  ]);
+  assert.equal(result.transactions.length, 1);
+  assert.equal(result.transactions[0].date, '2026-01-01');
+  assert.equal(result.transactions[0].tradeTime, '09:15:30');
+  assert.equal(result.transactions[0].exchangeOrderId, '000012345678901234567890');
+  assert.equal(result.transactions[0].orderId, undefined);
+  assert.equal(result.transactions[0].price, 250);
+});
+
+test('Groww P&L and capital-gains summaries are fatal trade sources and cannot be remapped', () => {
+  const rows=[['Stock name','ISIN','Quantity','Buy date','Buy price','Buy value','Sell date','Sell price','Sell value','Realised P&L','Remark'],['Synthetic','SYNTH',1,'01-01-2026',100,100,'02-01-2026',110,110,10,'']];
+  const preview=parseRows(rows,'trades');
+  assert.equal(preview.fatal,true);
+  assert.equal(preview.transactions.length,0);
+  assert.match(preview.blockingErrors[0],/not Stocks Order History/);
+  assert.equal(parseRows(preview,'trades',{symbol:0,date:3,side:10,quantity:2,price:4}).fatal,true);
+});
+
+test('cancelled/expired orders retain proven executions, warn, and reject ambiguous generic Value', () => {
+  const terminatedHeaders = [...orderHeaders, 'Executed Quantity', 'Order Status', 'Execution Price'];
+  const proven = parseRows([terminatedHeaders,
+    [...orderRow.map((cell, index) => index === 4 ? 100 : index === 5 ? 500 : cell), 2, 'Cancelled', 250],
+    [...orderRow.map((cell, index) => index === 4 ? 100 : index === 5 ? 600 : cell), 3, 'Expired', 200],
+    [...orderRow.map((cell, index) => index === 4 ? 100 : index === 5 ? 500 : cell), 2, 'Canceled', 250]]);
+  assert.deepEqual(proven.transactions.map(row => row.quantity), [2, 3, 2]);
+  assert.deepEqual(proven.transactions.map(row => row.price), [250, 200, 250]);
+  assert.equal(proven.rowIssues.length, 3);
+  assert.ok(proven.rowIssues.every(issue => issue.code === 'executed-terminated-order'));
+  assert.ok(proven.warnings.some(warning => warning.includes('Retained 3 executed fill')));
+  assert.equal(proven.transactions[0].status, 'Cancelled');
+  assert.deepEqual(parseRows(proven, 'trades', { quantity: 'Quantity', price: 'Execution Price' }).transactions, proven.transactions);
+  const ambiguous = parseRows([[...orderHeaders, 'Executed Quantity', 'Status'], [...orderRow, 2, 'Cancelled'], [...orderRow, 2, 'Expired']]);
+  assert.equal(ambiguous.transactions.length, 0);
+  assert.equal(ambiguous.rowIssues.length, 2);
+  assert.ok(ambiguous.rowIssues.every(issue => issue.reasons.includes('cancelled/expired order has ambiguous executed price/value basis')));
+  const labelledValue = parseRows([[...orderHeaders.map(header => header === 'Value' ? 'Trade Value' : header), 'Executed Quantity', 'Status'],
+    [...orderRow.map((cell, index) => index === 4 ? 100 : index === 5 ? 500 : cell), 2, 'Cancelled']]);
+  assert.equal(labelledValue.transactions.length, 1);
+  assert.equal(labelledValue.transactions[0].price, 250);
+});
+
+test('cancelled/expired order rows without executed quantity or with conflicting consideration remain rejected', () => {
+  for (const status of ['Cancelled', 'Expired']) {
+    const noQuantity = parseRows([[...orderHeaders, 'Status', 'Execution Price'], [...orderRow, status, 250]]);
+    assert.equal(noQuantity.transactions.length, 0);
+    const rows = parseRows([[...orderHeaders, 'Executed Quantity', 'Status', 'Execution Price'], [...orderRow, 0, status, 250], [...orderRow, 2, status, 250]]);
+    assert.equal(rows.transactions.length, 0);
+    assert.equal(rows.rowIssues.length, 2);
+    assert.ok(rows.rowIssues[1].reasons.some(reason => reason.includes('conflicting price/value')));
+  }
 });

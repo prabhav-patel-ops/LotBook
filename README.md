@@ -18,4 +18,4 @@ No server, analytics, remote fonts, secrets or account data are included. Librar
 
 All fixtures in tests are synthetic. Never commit user statements or backups. Private files belong outside the checkout or in the ignored `private-data/` directory.
 
-MVP limits: long equity only; no corporate actions, dividends, short positions, mutual funds, margin, F&O, price APIs or cash-ledger reconstruction. Statement aliases are tested on synthetic layouts, and actual Groww report variations may require mapping.
+MVP limits: long equity only; no corporate actions, dividends, short positions, mutual funds, margin, F&O, price APIs or cash-ledger reconstruction. The current Groww Stocks Order History and Stock Holding Statement layouts are locally verified; P&L and Capital Gains summaries are intentionally rejected as execution history. Future report variations may require mapping or aliases.

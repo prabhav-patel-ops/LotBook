@@ -163,7 +163,7 @@ test('rounding retains fee precision until reporting; no fees are invented', () 
 });
 
 test('empty input returns a complete zero summary', () => {
-  assert.deepEqual(analyse([]), { holdings: [], cycles: [], monthlyResults: [], errors: [], totals: { invested: 0, currentValue: 0, unrealized: 0, realizedGross: 0, charges: 0, realizedNet: 0, fifoNet: 0, cycles: 0, wins: 0, losses: 0, unpriced: 0 } });
+  assert.deepEqual(analyse([]), { holdings: [], cycles: [], monthlyResults: [], errors: [], totals: { invested: 0, currentValue: 0, unrealized: 0, realizedGross: 0, charges: 0, realizedNet: 0, fifoNet: 0, cycles: 0, wins: 0, losses: 0, unpriced: 0, unknownCharges: 0 } });
 });
 
 test('monthly results sum unrounded cycles to preserve a cent of buy fees across three closes', () => {

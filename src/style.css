@@ -1253,3 +1253,17 @@ pre {
     scroll-behavior: auto !important;
   }
 }
+#app-status:empty { display:none; }
+#app-status { position:sticky; top:0; z-index:120; }
+#app-status .notice { margin:0; border-radius:0; display:flex; align-items:center; justify-content:center; gap:16px; }
+.check-label { display:flex; align-items:flex-start; gap:10px; margin:14px 0; }
+.check-label input { width:auto; margin-top:3px; }
+.dialog details { margin:14px 0; }
+.dialog pre { max-width:100%; overflow:auto; white-space:pre-wrap; }
+@media (max-width: 600px) {
+  #app-status .notice { align-items:stretch; flex-direction:column; }
+  .overlay { padding:10px; }
+  .dialog { width:min(100%, 720px); max-height:calc(100dvh - 20px); padding:20px 16px; overflow:auto; }
+  .dialog .form-grid { grid-template-columns:1fr; }
+  .preview-row,.history-row,.cycle-row,.kv { min-width:0; overflow-wrap:anywhere; }
+}
