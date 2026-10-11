@@ -5,6 +5,7 @@ import { parseReferenceStatement, summarizeReferenceEntries } from "./reference-
 import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js";
 import { csvCell, allocateLots } from "./ui-logic.js";
 import { planTransactions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
+import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote } from "./market-data.js";
 const $ = (s) => document.querySelector(s),
   esc = (s) =>
     String(s ?? "").replace(
@@ -45,6 +46,11 @@ let state,
   stale = false,
   updateReady = false,
   importRun = 0;
+let marketQuotes = readMarketCache(localStorage),
+  marketRefreshing = false,
+  marketMessage = "",
+  marketLastAttempt = 0,
+  marketAttempts = {};
 try {
   baselineRaw = localStorage.getItem(KEY);
   state = load();
@@ -54,13 +60,20 @@ try {
     "Your saved diary could not be read. It has not been overwritten. Export the stored file below, then restore a valid backup. " +
     e.message;
 }
-const live = () =>
-  analyse(
-    state.transactions,
-    Object.fromEntries(
-      Object.entries(state.prices).map(([s, p]) => [s, p.price]),
-    ),
-  );
+const priceFor = (symbol) => resolveHoldingPrice(symbol, state.prices, marketQuotes, Boolean(localStorage.getItem(MARKET_KEY)));
+const live = () => analyse(state.transactions, Object.fromEntries(
+  [...new Set([...Object.keys(state.prices), ...Object.keys(marketQuotes)])]
+    .filter(symbol => priceFor(symbol) != null).map(symbol => [symbol, priceFor(symbol)]),
+));
+const quoteDetail = symbol => {
+  const quote = marketQuotes[symbol];
+  if (localStorage.getItem(MARKET_KEY) && usableMarketQuote(quote)) {
+    const when = new Date(quote.fetchedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+    const old = Date.now() - Date.parse(quote.fetchedAt) > 24 * 60 * 60 * 1000;
+    return `${old ? 'Older quote · ' : ''}${quote.source || 'IndianAPI'} · fetched ${when} · market time unverified`;
+  }
+  return state.prices[symbol] ? `Manual · entered ${state.prices[symbol].date || 'date unknown'}` : 'No price available';
+};
 const commit = (next) => {
   if (loadError) throw Error("Recover your existing diary before saving.");
   if (demo)
@@ -69,7 +82,65 @@ const commit = (next) => {
   baselineRaw = localStorage.getItem(KEY);
   state = validateBackup(next);
   render();
+  queueMicrotask(scheduleMarketRefresh);
 };
+const marketIsOpen = () => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date()).map(part => [part.type, part.value]));
+  if (parts.weekday === 'Sat' || parts.weekday === 'Sun') return false;
+  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  return minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
+};
+async function refreshMarket(force = false) {
+  const key = localStorage.getItem(MARKET_KEY);
+  if (!key || demo || loadError || !state.profile || !state.onboarded || marketRefreshing) return;
+  if (!navigator.onLine) {
+    if (force) { marketMessage = 'Offline. Stored manual or recent quotes remain available.'; render(); }
+    return;
+  }
+  const symbols = live().holdings.filter(h => h.quantity > 0).map(h => h.symbol);
+  if (!symbols.length) {
+    if (force) { marketMessage = 'No current equity holdings to quote yet.'; render(); }
+    return;
+  }
+  const now = Date.now();
+  const interval = marketIntervalMs(localStorage);
+  const due = symbols.filter(symbol => force ||
+    ((!usableMarketQuote(marketQuotes[symbol]) || now - Date.parse(marketQuotes[symbol].fetchedAt) >= interval) &&
+      now - (marketAttempts[symbol] || 0) >= interval));
+  if (!due.length) return;
+  marketRefreshing = true;
+  marketLastAttempt = now;
+  marketMessage = '';
+  if (!$('#modal-root .dialog')) render();
+  let updated = 0;
+  const errors = [];
+  for (const symbol of due) {
+    if (localStorage.getItem(MARKET_KEY) !== key) break;
+    marketAttempts[symbol] = now;
+    if (!marketTicker(symbol)) { errors.push(`${symbol}: no matching market ticker`); continue; }
+    try {
+      marketQuotes[symbol] = await fetchIndianQuote(symbol, key);
+      updated++;
+    } catch (error) {
+      errors.push(`${symbol}: ${error.message}`);
+      if (/limit reached|key was rejected/.test(error.message)) break;
+    }
+  }
+  if (localStorage.getItem(MARKET_KEY) !== key) { marketRefreshing = false; return; }
+  try { localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(marketQuotes)); }
+  catch { errors.push('Could not cache quotes on this device'); }
+  marketRefreshing = false;
+  marketMessage = errors.length ? `${updated} updated · ${errors.length} issue(s): ${errors[0]}` : `${updated} price${updated === 1 ? '' : 's'} updated`;
+  if (!$('#modal-root .dialog')) render();
+}
+function scheduleMarketRefresh() {
+  if (!localStorage.getItem(MARKET_KEY) || !state.onboarded || demo) return;
+  if (document.visibilityState !== 'visible' || $('#modal-root .dialog') ||
+      document.activeElement?.matches('input, textarea, select')) return;
+  if (!marketLastAttempt || marketIsOpen()) refreshMarket();
+}
 function notify(msg) {
   $("#toast").textContent = msg;
   $("#toast").classList.add("show");
@@ -152,11 +223,18 @@ function renderStatus() {
 }
 function welcome() {
   $("#app").innerHTML =
-    `<div class="welcome-wrap"><section class="welcome-art"><div class="brand"><span class="logo light">L</span> Lotbook</div><div class="eyebrow">YOUR SHARES. YOUR STORY.</div><h1>Know the story<br>behind every trade.</h1><p>A personal space for your core holdings,<br>trading cycles, and everything in between.</p><div class="paper"><span class="eyebrow">A LITTLE LOT CLARITY</span><div class="paper-row">Core holding <b>10 shares · ₹1,300</b></div><div class="paper-row">Trading purchase <b>10 shares · ₹1,250</b></div><div class="paper-row">Trading sale <b>10 shares · ₹1,270</b></div><div class="paper-result">One completed cycle <strong>+₹200</strong></div><small>Synthetic example · before charges</small></div><p class="privacy">● Local storage. No uploads to a server.</p></section><section class="welcome-form"><span class="step-label">LET’S MAKE THIS YOURS</span><h2>Welcome to Lotbook.</h2><p>Your diary starts with a name.<br>No passwords. No broker credentials.</p><form id="welcome-form"><label>Your name<input name="name" maxlength="60" placeholder="What should we call you?" autocomplete="given-name" required></label><button class="full">Start my diary →</button></form><p class="fine">This is a local profile, not an authenticated account. Anyone with access to this browser can open it.</p><button class="text-button" data-action="demo">Explore a sample diary</button></section></div>`;
+`<div class="welcome-wrap"><section class="welcome-art"><div class="brand"><span class="logo light">L</span> Lotbook</div><div class="eyebrow">YOUR SHARES. YOUR STORY.</div><h1>Know the story<br>behind every trade.</h1><p>A personal space for your core holdings,<br>trading cycles, and everything in between.</p><div class="paper"><span class="eyebrow">A LITTLE LOT CLARITY</span><div class="paper-row">Core holding <b>10 shares · ₹1,300</b></div><div class="paper-row">Trading purchase <b>10 shares · ₹1,250</b></div><div class="paper-row">Trading sale <b>10 shares · ₹1,270</b></div><div class="paper-result">One completed cycle <strong>+₹200</strong></div><small>Synthetic example · before charges</small></div><p class="privacy">● Diary data stays on this device.</p></section><section class="welcome-form"><span class="step-label">LET’S MAKE THIS YOURS</span><h2>Welcome to Lotbook.</h2><p>Your diary starts with a name.<br>No passwords. No broker credentials.</p><form id="welcome-form"><label>Your name<input name="name" maxlength="60" placeholder="What should we call you?" autocomplete="given-name" required></label><button class="full">Start my diary →</button></form><p class="fine">This is a local profile, not an authenticated account. Anyone with access to this browser can open it.</p><button class="text-button" data-action="demo">Explore a sample diary</button></section></div>`;
+}
+function marketPanel(a) {
+  const connected = Boolean(localStorage.getItem(MARKET_KEY));
+  const linked = a.holdings.filter(h => connected && h.quantity > 0 && usableMarketQuote(marketQuotes[h.symbol])).length;
+  const count = a.holdings.filter(h => h.quantity > 0).length;
+  const older = a.holdings.filter(h => connected && h.quantity > 0 && usableMarketQuote(marketQuotes[h.symbol]) && Date.now() - Date.parse(marketQuotes[h.symbol].fetchedAt) > 24 * 60 * 60 * 1000).length;
+return `<section class="panel mini market-panel"><div class="panel-title"><div><h2>Market-linked prices</h2><span>${linked} of ${count} holdings quoted · manual prices fill gaps</span></div><button class="secondary" data-action="refreshquotes" ${!connected || marketRefreshing ? 'disabled' : ''}>${marketRefreshing ? 'Updating…' : 'Refresh prices'}</button></div><p>${connected ? `IndianAPI quotes are fetched only while this app is open. Automatic checks run every ${marketIntervalMs(localStorage) / 60000} minutes during NSE market hours; refresh manually whenever needed. Free API limits may restrict updates.` : 'Automatic prices are not connected. Add a free IndianAPI key in Settings; your existing manual prices remain available.'}</p>${older ? `<p class="notice" role="status">${older} quote${older === 1 ? ' is' : 's are'} over 24 hours old. Treat the displayed value as historical, not live.</p>` : ''}${marketMessage ? `<p class="${/issue/.test(marketMessage) ? 'notice error' : 'fine'}" role="status">${esc(marketMessage)}</p>` : ''}<p class="fine">Fetched time is when your device requested a quote, not a verified market-trade timestamp. Quotes may be delayed. If a quote is over seven days old, LotBook stops using it in valuation. No share counts or trade history are sent to the quote service.</p>${!connected ? '<button class="secondary" data-view="settings">Connect free quotes</button>' : ''}</section>`;
 }
 function stats(a) {
   const enteredValue = a.totals.unpriced && a.holdings.every(h => h.currentPrice === null) ? null : a.totals.currentValue;
-  return `<div class="stats"><div class="stat-card featured"><span>Holdings cost</span><strong>${money(a.totals.invested)}</strong><small>Cost of remaining purchase lots</small></div><div class="stat-card"><span>Value at entered prices</span><strong>${money(enteredValue)}</strong><small>${a.totals.unpriced ? "Incomplete · missing prices: " + a.totals.unpriced : "Manual prices · not a live feed"}</small></div><div class="stat-card"><span>Result after recorded costs</span><strong class="${tone(a.totals.realizedNet)}">${money(a.totals.realizedNet)}</strong><small>Selected lots · ${a.cycles.length} closures · before income tax</small></div><div class="stat-card"><span>Diary FIFO comparison</span><strong class="${tone(a.totals.fifoNet)}">${money(a.totals.fifoNet)}</strong><small>Diary comparison · not verified broker / tax FIFO</small></div></div>${a.totals.unknownCharges?`<div class="notice">Charges are unknown for ${a.totals.unknownCharges} transactions. Results after recorded costs are provisional; enter actual costs in Diary. Legacy zero charges remain unknown until verified.</div>`:'<p class="fine">Results include only recorded transaction costs, before personal income tax. Verify cost coverage independently.</p>'}`;
+  return `<div class="stats"><div class="stat-card featured"><span>Holdings cost</span><strong>${money(a.totals.invested)}</strong><small>Cost of remaining purchase lots</small></div><div class="stat-card"><span>Value at available prices</span><strong>${money(enteredValue)}</strong><small>${a.totals.unpriced ? "Incomplete · missing prices: " + a.totals.unpriced : "IndianAPI or manual prices · see source and age below"}</small></div><div class="stat-card"><span>Result after recorded costs</span><strong class="${tone(a.totals.realizedNet)}">${money(a.totals.realizedNet)}</strong><small>Selected lots · ${a.cycles.length} closures · before income tax</small></div><div class="stat-card"><span>Diary FIFO comparison</span><strong class="${tone(a.totals.fifoNet)}">${money(a.totals.fifoNet)}</strong><small>Diary comparison · not verified broker / tax FIFO</small></div></div>${a.totals.unknownCharges?`<div class="notice">Charges are unknown for ${a.totals.unknownCharges} transactions. Results after recorded costs are provisional; enter actual costs in Diary. Legacy zero charges remain unknown until verified.</div>`:'<p class="fine">Results include only recorded transaction costs, before personal income tax. Verify cost coverage independently.</p>'}`;
 }
 function holdings(a) {
   const list = a.holdings.filter(
@@ -166,7 +244,7 @@ function holdings(a) {
         h.symbol.toLowerCase().includes(query.toLowerCase()) ||
         h.name?.toLowerCase().includes(query.toLowerCase())),
   );
-  return `${stats(a)}<div class="info-bar"><span>ⓘ</span><p>Lot selection changes how your diary attributes a sale. Your broker records and actual economic gain stay the same. FIFO here is a comparison, not a tax report.</p></div><section class="panel"><div class="panel-title"><div><h2>Portfolio</h2><span>${a.holdings.filter((h) => h.quantity > 0).length} holdings <span class="dot">·</span> Tap a stock to see every purchase</span></div><input class="search" id="search" value="${esc(query)}" placeholder="Search your holdings" aria-label="Search holdings"></div>${list.length ? `<div class="holdings-head"><span>Stock / quantity</span><span>Average / cost</span><span>Entered price / value</span><span>Unrealised</span></div>${list.map((h) => `<button class="holding-row" data-stock="${esc(h.symbol)}"><div class="stock-main"><span class="stock-icon">${esc(h.symbol.slice(0, 2))}</span><div><b>${esc(h.name || h.symbol)}</b><small>${esc(h.symbol)} · ${num(h.quantity)} shares</small><span class="tag">${num(h.coreQuantity)} core · ${num(h.tradingQuantity)} trading</span></div></div><div><b>${money(h.averageCost)}</b><small>${money(h.cost)}</small></div><div><b>${money(h.currentPrice)}</b><small>${money(h.currentValue)}</small></div><div><b class="${h.unrealized === null ? "" : tone(h.unrealized)}">${money(h.unrealized)}</b><small>View lots →</small></div></button>`).join("")}` : `<div class="empty"><span class="empty-icon">◫</span><h3>${query ? "No matching stocks" : "Your portfolio starts here"}</h3><p>Import your Groww order history, or add your first purchase.<br>Every purchase becomes a lot you can follow.</p><button data-action="buy">Add a purchase</button><button class="secondary" data-view="import">Import statements</button></div>`}</section>${reconciliation(a)}<div class="two-col"><section class="panel mini"><div class="panel-title"><h2>Cash balance</h2><button class="text-button" data-action="cash">Update</button></div><strong class="large">${money(state.cash)}</strong><p>Enter the balance shown in Groww manually. It is not reconstructed from equity trades.</p></section><section class="panel mini"><div class="panel-title"><h2>Your diary, your device</h2><span>↗</span></div><p>Export a backup regularly. Browser storage can be cleared or lost when you change devices.</p><button class="secondary" data-action="export">Export my diary</button></section></div>`;
+  return `${stats(a)}${marketPanel(a)}<div class="info-bar"><span>ⓘ</span><p>Lot selection changes how your diary attributes a sale. Your broker records and actual economic gain stay the same. FIFO here is a comparison, not a tax report.</p></div><section class="panel"><div class="panel-title"><div><h2>Portfolio</h2><span>${a.holdings.filter((h) => h.quantity > 0).length} holdings <span class="dot">·</span> Tap a stock to see every purchase</span></div><input class="search" id="search" value="${esc(query)}" placeholder="Search your holdings" aria-label="Search holdings"></div>${list.length ? `<div class="holdings-head"><span>Stock / quantity</span><span>Average / cost</span><span>Price / value</span><span>Unrealised</span></div>${list.map((h) => `<button class="holding-row" data-stock="${esc(h.symbol)}"><div class="stock-main"><span class="stock-icon">${esc(h.symbol.slice(0, 2))}</span><div><b>${esc(h.name || h.symbol)}</b><small>${esc(h.symbol)} · ${num(h.quantity)} shares</small><span class="tag">${num(h.coreQuantity)} core · ${num(h.tradingQuantity)} trading</span></div></div><div><b>${money(h.averageCost)}</b><small>${money(h.cost)}</small></div><div><b>${money(h.currentPrice)}</b><small>${money(h.currentValue)}</small><small>${esc(quoteDetail(h.symbol))}</small></div><div><b class="${h.unrealized === null ? "" : tone(h.unrealized)}">${money(h.unrealized)}</b><small>View lots →</small></div></button>`).join("")}` : `<div class="empty"><span class="empty-icon">◫</span><h3>${query ? "No matching stocks" : "Your portfolio starts here"}</h3><p>Import your Groww order history, or add your first purchase.<br>Every purchase becomes a lot you can follow.</p><button data-action="buy">Add a purchase</button><button class="secondary" data-view="import">Import statements</button></div>`}</section>${reconciliation(a)}<div class="two-col"><section class="panel mini"><div class="panel-title"><h2>Cash balance</h2><button class="text-button" data-action="cash">Update</button></div><strong class="large">${money(state.cash)}</strong><p>Enter the balance shown in Groww manually. It is not reconstructed from equity trades.</p></section><section class="panel mini"><div class="panel-title"><h2>Your diary, your device</h2><span>↗</span></div><p>Export a backup regularly. Browser storage can be cleared or lost when you change devices.</p><button class="secondary" data-action="export">Export my diary</button></section></div>`;
 }
 function reconciliation(a) {
   if (!state.snapshots.length && !state.snapshotComplete) return "";
@@ -250,10 +328,14 @@ function reportPeriod(report){return report.period?.start&&report.period?.end?`$
 function infoContent(a) {
   const reports=referenceReports(),capital=referenceReports('capital-gains'),pnl=referenceReports('pnl');
   const capitalEntries=capital.flatMap(report=>report.entries),tax=summarizeReferenceEntries(capitalEntries);
-  return `<section class="panel info-hero"><div><span class="eyebrow">ⓘ LOTBOOK GUIDE</span><h2>Every number has a source.</h2><p>LotBook keeps the diary, broker reports, and tax reference distinct. That makes it useful without pretending a broker summary is a trade ledger.</p></div><button class="secondary" data-action="privacy">${state.privacyMode?'Show amounts':'Hide amounts'} in public</button></section><section class="panel"><div class="panel-title"><div><h2>What the reports represent</h2><span>All data stays in this browser</span></div></div><div class="report-grid"><article><b>Stocks Order History</b><p>Executed buy and sell records. This is the source for purchase lots, sale matching, diary P&amp;L, and remaining holdings.</p></article><article><b>Stock Holdings Statement</b><p>A point-in-time broker snapshot. It compares reported quantity and average price with the diary; it never creates a missing purchase.</p></article><article><b>Stocks P&amp;L</b><p>Groww’s realised and unrealised result view. It is a broker reference and can differ from chosen diary lots, costs, cut-off, and average-price conventions.</p></article><article><b>Capital Gains Statement</b><p>Groww’s realised short-term and long-term sale reference for the selected period. It supports tax review but does not calculate your final return.</p></article></div></section><section class="panel"><div class="panel-title"><div><h2>Tax reference from Capital Gains statements</h2><span>${capital.length?`${capital.length} report${capital.length===1?'':'s'} saved locally`:'No Capital Gains statement saved yet'}</span></div></div>${capital.length?`<div class="stats compact"><div class="stat-card"><span>Reported short-term P&amp;L</span><strong class="${tone(tax.shortTerm)}">${money(tax.shortTerm)}</strong><small>Groww-labelled short-term rows</small></div><div class="stat-card"><span>Reported long-term P&amp;L</span><strong class="${tone(tax.longTerm)}">${money(tax.longTerm)}</strong><small>Groww-labelled long-term rows</small></div><div class="stat-card"><span>Unclassified realised P&amp;L</span><strong class="${tone(tax.unclassified)}">${money(tax.unclassified)}</strong><small>Requires classification review</small></div></div><div class="reference-list">${capital.map(report=>{const s=summarizeReferenceEntries(report.entries);return `<div class="kv"><span><b>Capital Gains</b><small>${esc(reportPeriod(report))} · ${report.entries.length} reference rows</small></span><span>ST ${money(s.shortTerm)}<small>LT ${money(s.longTerm)} · Realised ${money(s.realised)}</small></span></div>`}).join('')}</div>`:`<div class="empty"><h3>Add your Capital Gains Statements</h3><p>Upload every financial-year report in Statements. They will appear here separately.</p><button data-view="import">Open Statements</button></div>`}<details class="info-details" open><summary>How tax treatment is shown</summary><p>For eligible listed equity where the statutory conditions are met, the current Income Tax Department references show short-term capital gains under section 111A at 20% and long-term gains under section 112A at 12.5%. The ₹1.25 lakh section 112A threshold applies to eligible long-term gains for the relevant year, not to the whole portfolio.</p><p>LotBook does <b>not</b> show a final tax payable figure. Final liability can depend on eligibility, STT, residential status, other income, set-off and carried-forward losses, grandfathering rules, surcharge, and 4% health and education cess. Use the Capital Gains statement and an ITR/tax professional for filing.</p><p><a href="https://www.incometax.gov.in/iec/foportal/help/all-topics/e-filing-services/itr-2/itr-2-UM" target="_blank" rel="noopener noreferrer">Income Tax Department: ITR-2 capital-gains guidance ↗</a> · <a href="https://www.incometax.gov.in/iec/foportal/help/individual/return-applicable-1" target="_blank" rel="noopener noreferrer">Income Tax Department: section 112A threshold reference ↗</a></p></details></section><section class="two-col"><section class="panel mini"><h2>Diary P&amp;L</h2><p><b>Result after recorded costs</b> is based on the purchase lots you chose for sales, plus only recorded transaction charges. It is useful for your journal and does not change your Groww records.</p><p><b>Diary FIFO comparison</b> applies FIFO to the diary’s loaded transactions only. It is not a broker or tax certificate.</p></section><section class="panel mini"><h2>Broker P&amp;L reference</h2><p>${pnl.length?`${pnl.length} P&amp;L report${pnl.length===1?' is':'s are'} saved. `:'No P&amp;L report saved yet. '}Groww’s realised/unrealised view may use its own average-price, timing, and statement rules. Compare it with the diary; do not expect different bases to be identical.</p><p><b>Recorded costs</b> means only fees supplied by a report or entered by you. Blank costs remain unknown, never assumed to be zero.</p></section></section><section class="panel mini"><h2>Privacy in public places</h2><p>Use <b>Hide amounts</b> in the header to mask currency values across LotBook while leaving the structure visible. It is a screen-privacy tool, not encryption. Anyone with access to this browser profile can still reveal the values, so export a backup before clearing browser data or changing devices.</p></section>`;
+  return `<section class="panel info-hero"><div><span class="eyebrow">ⓘ LOTBOOK GUIDE</span><h2>Every number has a source.</h2><p>LotBook keeps the diary, broker reports, and tax reference distinct. That makes it useful without pretending a broker summary is a trade ledger.</p></div><button class="secondary" data-action="privacy">${state.privacyMode?'Show amounts':'Hide amounts'} in public</button></section><section class="panel"><div class="panel-title"><div><h2>What the reports represent</h2><span>Diary stays in this browser</span></div></div><div class="report-grid"><article><b>Stocks Order History</b><p>Executed buy and sell records. This is the source for purchase lots, sale matching, diary P&amp;L, and remaining holdings.</p></article><article><b>Stock Holdings Statement</b><p>A point-in-time broker snapshot. It compares reported quantity and average price with the diary; it never creates a missing purchase.</p></article><article><b>Stocks P&amp;L</b><p>Groww’s realised and unrealised result view. It is a broker reference and can differ from chosen diary lots, costs, cut-off, and average-price conventions.</p></article><article><b>Capital Gains Statement</b><p>Groww’s realised short-term and long-term sale reference for the selected period. It supports tax review but does not calculate your final return.</p></article></div></section><section class="panel"><div class="panel-title"><div><h2>Tax reference from Capital Gains statements</h2><span>${capital.length?`${capital.length} report${capital.length===1?'':'s'} saved locally`:'No Capital Gains statement saved yet'}</span></div></div>${capital.length?`<div class="stats compact"><div class="stat-card"><span>Reported short-term P&amp;L</span><strong class="${tone(tax.shortTerm)}">${money(tax.shortTerm)}</strong><small>Groww-labelled short-term rows</small></div><div class="stat-card"><span>Reported long-term P&amp;L</span><strong class="${tone(tax.longTerm)}">${money(tax.longTerm)}</strong><small>Groww-labelled long-term rows</small></div><div class="stat-card"><span>Unclassified realised P&amp;L</span><strong class="${tone(tax.unclassified)}">${money(tax.unclassified)}</strong><small>Requires classification review</small></div></div><div class="reference-list">${capital.map(report=>{const s=summarizeReferenceEntries(report.entries);return `<div class="kv"><span><b>Capital Gains</b><small>${esc(reportPeriod(report))} · ${report.entries.length} reference rows</small></span><span>ST ${money(s.shortTerm)}<small>LT ${money(s.longTerm)} · Realised ${money(s.realised)}</small></span></div>`}).join('')}</div>`:`<div class="empty"><h3>Add your Capital Gains Statements</h3><p>Upload every financial-year report in Statements. They will appear here separately.</p><button data-view="import">Open Statements</button></div>`}<details class="info-details" open><summary>How tax treatment is shown</summary><p>For eligible listed equity where the statutory conditions are met, the current Income Tax Department references show short-term capital gains under section 111A at 20% and long-term gains under section 112A at 12.5%. The ₹1.25 lakh section 112A threshold applies to eligible long-term gains for the relevant year, not to the whole portfolio.</p><p>LotBook does <b>not</b> show a final tax payable figure. Final liability can depend on eligibility, STT, residential status, other income, set-off and carried-forward losses, grandfathering rules, surcharge, and 4% health and education cess. Use the Capital Gains statement and an ITR/tax professional for filing.</p><p><a href="https://www.incometax.gov.in/iec/foportal/help/all-topics/e-filing-services/itr-2/itr-2-UM" target="_blank" rel="noopener noreferrer">Income Tax Department: ITR-2 capital-gains guidance ↗</a> · <a href="https://www.incometax.gov.in/iec/foportal/help/individual/return-applicable-1" target="_blank" rel="noopener noreferrer">Income Tax Department: section 112A threshold reference ↗</a></p></details></section><section class="two-col"><section class="panel mini"><h2>Diary P&amp;L</h2><p><b>Result after recorded costs</b> is based on the purchase lots you chose for sales, plus only recorded transaction charges. It is useful for your journal and does not change your Groww records.</p><p><b>Diary FIFO comparison</b> applies FIFO to the diary’s loaded transactions only. It is not a broker or tax certificate.</p></section><section class="panel mini"><h2>Broker P&amp;L reference</h2><p>${pnl.length?`${pnl.length} P&amp;L report${pnl.length===1?' is':'s are'} saved. `:'No P&amp;L report saved yet. '}Groww’s realised/unrealised view may use its own average-price, timing, and statement rules. Compare it with the diary; do not expect different bases to be identical.</p><p><b>Recorded costs</b> means only fees supplied by a report or entered by you. Blank costs remain unknown, never assumed to be zero.</p></section></section><section class="panel mini"><h2>Privacy in public places</h2><p>Use <b>Hide amounts</b> in the header to mask currency values across LotBook while leaving the structure visible. It is a screen-privacy tool, not encryption. Anyone with access to this browser profile can still reveal the values, so export a backup before clearing browser data or changing devices.</p></section>`;
+}
+function marketSettings() {
+  const connected = Boolean(localStorage.getItem(MARKET_KEY));
+return `<section class="panel mini"><h2>Free market prices</h2><p>${connected ? 'A quote key is saved on this device only. It is not included in diary backups.' : 'Create a free IndianAPI account, subscribe to its free stock API plan, and paste the key below.'} LotBook asks for one NSE/BSE ticker at a time. It does not send your name, quantities, transactions, notes, or Groww files.</p><form id="market-key-form"><label>Refresh while app is open<select name="refreshMinutes">${[15,30,60,120].map(n=>`<option value="${n}" ${marketIntervalMs(localStorage)/60000===n?'selected':''}>Every ${n} minutes</option>`).join('')}</select></label><label>IndianAPI key<input name="marketKey" type="password" autocomplete="off" placeholder="Paste free API key" required maxlength="300"></label><button>${connected ? 'Replace key' : 'Connect quotes'}</button></form>${connected ? '<button class="secondary" data-action="clearmarketkey">Disconnect quote API</button>' : ''}<p class="fine">The 15-minute setting uses more free API credits, especially with many holdings. Key and quote cache live only in this browser. Anyone with access to this browser profile could read the key. Never paste it in chat or commit it to GitHub. <a href="https://indianapi.in/indian-stock-market" target="_blank" rel="noopener noreferrer">Get a free key ↗</a></p>${marketMessage ? `<p class="notice" role="status">${esc(marketMessage)}</p>` : ''}</section>`;
 }
 function settings() {
-  return `<div class="two-col"><section class="panel mini"><h2>Your local profile</h2><form id="profile-form"><label>Name<input name="name" value="${esc(state.profile)}" maxlength="60" required></label><button>Save name</button></form><p>A convenience profile on this browser. No password or cloud account.</p></section><section class="panel mini"><h2>Install Lotbook</h2><p>On Android, open this site in Chrome and use Install app or the menu → Add to Home screen. On iPhone use Safari → Share → Add to Home Screen.</p><button data-action="install">Install / instructions</button><small>Install prompts depend on your browser. Offline use works after the app has loaded online.</small></section><section class="panel mini"><h2>Keep a backup</h2><p>Export a JSON diary for another device. Import replaces this diary only after validation and confirmation.</p><button data-action="export">Export backup</button><label class="button secondary">Import backup<input type="file" id="restore" accept=".json" hidden></label><button class="text-button" data-action="csv">Export transactions CSV</button></section><section class="panel mini"><h2>Privacy &amp; data</h2><p>Parsed records live in this browser’s local storage. Statements are processed in memory and are never sent to our servers or GitHub. No analytics, external fonts, ads, broker API, or AI service.</p><p>Public GitHub hosts the app files and receives ordinary web requests. It does not receive your name or financial records. Shared devices and browser clearing can expose or erase local data.</p><button class="danger secondary" data-action="clear">Clear all local data</button></section></div><section class="panel mini"><h2>App updates · v${__APP_VERSION__}</h2><p>After changes are published, refresh to load the latest app. Export before changing browsers or clearing website data.</p><button data-action="checkupdate">Check for app update</button><button class="secondary" data-action="refresh">Refresh app</button></section><section class="panel mini"><h2>Understand the numbers</h2><p>Selecting a purchase lot changes realised and unrealised attribution in your diary. It does not change the shares actually sold through Groww, broker FIFO records, or total wealth. Verify charges and broker records independently. Current prices and cash are manually entered and can become stale.</p><a href="./guide.html" target="_blank">Read the app flow and limitations ↗</a></section>`;
+  return `${marketSettings()}<div class="two-col"><section class="panel mini"><h2>Your local profile</h2><form id="profile-form"><label>Name<input name="name" value="${esc(state.profile)}" maxlength="60" required></label><button>Save name</button></form><p>A convenience profile on this browser. No password or cloud account.</p></section><section class="panel mini"><h2>Install Lotbook</h2><p>On Android, open this site in Chrome and use Install app or the menu → Add to Home screen. On iPhone use Safari → Share → Add to Home Screen.</p><button data-action="install">Install / instructions</button><small>Install prompts depend on your browser. Offline use works after the app has loaded online.</small></section><section class="panel mini"><h2>Keep a backup</h2><p>Export a JSON diary for another device. Import replaces this diary only after validation and confirmation.</p><button data-action="export">Export backup</button><label class="button secondary">Import backup<input type="file" id="restore" accept=".json" hidden></label><button class="text-button" data-action="csv">Export transactions CSV</button></section><section class="panel mini"><h2>Privacy &amp; data</h2><p>Parsed records live in this browser’s local storage. Statements are processed in memory and are never sent to our servers or GitHub. No analytics, external fonts, ads, or broker connection. Enabling quotes sends only tickers and your key to IndianAPI; it never sends your share counts or diary.</p><p>Public GitHub hosts the app files and receives ordinary web requests. It does not receive your name or financial records. Shared devices and browser clearing can expose or erase local data.</p><button class="danger secondary" data-action="clear">Clear all local data</button></section></div><section class="panel mini"><h2>App updates · v${__APP_VERSION__}</h2><p>After changes are published, refresh to load the latest app. Export before changing browsers or clearing website data.</p><button data-action="checkupdate">Check for app update</button><button class="secondary" data-action="refresh">Refresh app</button></section><section class="panel mini"><h2>Understand the numbers</h2><p>Selecting a purchase lot changes realised and unrealised attribution in your diary. It does not change the shares actually sold through Groww, broker FIFO records, or total wealth. Verify charges and broker records independently. Market prices may be delayed or unavailable, and cash is still entered manually. Check each quote source and fetched time.</p><a href="./guide.html" target="_blank">Read the app flow and limitations ↗</a></section>`;
 }
 function modal(title, body) {
   $("#modal-root").innerHTML =
@@ -597,9 +679,21 @@ document.addEventListener("click", (e) => {
         break;
       case "quote":
         modal(
-          "Update entered price",
-          `<form id="quote-form">${field("Price per share (₹)", "price", "number", state.prices[selected]?.price || "", 'required min="0.01" step="any"')}<p class="fine">This is a manual snapshot, not a live quote.</p><button>Save price</button></form>`,
+          "Update manual price",
+          `<form id="quote-form">${field("Price per share (₹)", "price", "number", state.prices[selected]?.price || "", 'required min="0.01" step="any"')}<p class="fine">Manual prices are used when no recent market quote is available. Disconnect quotes in Settings to use manual prices only.</p><button>Save price</button></form>`,
         );
+        break;
+      case "refreshquotes":
+        refreshMarket(true).catch(error => notify(error.message));
+        break;
+      case "clearmarketkey":
+        if (demo) throw Error('Exit the sample diary before changing quote settings.');
+        localStorage.removeItem(MARKET_KEY);
+        localStorage.removeItem(MARKET_CACHE_KEY);
+        localStorage.removeItem(MARKET_INTERVAL_KEY);
+        marketQuotes = {};
+        marketMessage = 'Market feed disconnected. Manual prices are unchanged.';
+        render();
         break;
       case "cash":
         modal(
@@ -657,6 +751,17 @@ document.addEventListener("submit", (e) => {
       case "profile-form":
         commit({ ...state, profile: d.name.trim() });
         notify("Name saved");
+        break;
+      case "market-key-form":
+        if (demo) throw Error('Exit the sample diary before connecting quotes.');
+        if (!d.marketKey || d.marketKey.trim().length < 8) throw Error('Enter your IndianAPI key from its dashboard.');
+        if (![15, 30, 60, 120].includes(Number(d.refreshMinutes))) throw Error('Choose a supported refresh interval.');
+        localStorage.setItem(MARKET_KEY, d.marketKey.trim());
+        localStorage.setItem(MARKET_INTERVAL_KEY, d.refreshMinutes);
+        marketMessage = 'Key saved on this device. Checking quotes…';
+        render();
+        notify('Quote key saved on this device.');
+        refreshMarket(true).catch(error => notify(error.message));
         break;
       case "buy-form":
         addTransaction({
@@ -739,6 +844,10 @@ document.addEventListener("submit", (e) => {
         if (d.confirm === "CLEAR") {
           if(localStorage.getItem(KEY)!==baselineRaw)throw Error('This diary changed in another tab. Refresh before clearing it.');
           localStorage.removeItem(KEY);
+          localStorage.removeItem(MARKET_KEY);
+          localStorage.removeItem(MARKET_CACHE_KEY);
+          localStorage.removeItem(MARKET_INTERVAL_KEY);
+          marketQuotes = {};
           baselineRaw = null;
           state = fresh();
           demo = false;
@@ -807,11 +916,13 @@ document.addEventListener("change", async (e) => {
           saveIfUnchanged(next,baselineRaw);
           baselineRaw=localStorage.getItem(KEY);
           state = next;
+          marketQuotes = readMarketCache(localStorage);
           demo = false;
           loadError = "";
           close();
           render();
           notify("Backup restored");
+          scheduleMarketRefresh();
         }),
       );
     } catch (err) {
@@ -841,6 +952,11 @@ window.addEventListener("beforeinstallprompt", (e) => {
   installPrompt = e;
 });
 window.addEventListener("storage", (e) => {
+  if (e.key === MARKET_CACHE_KEY || e.key === MARKET_KEY) {
+    marketQuotes = readMarketCache(localStorage);
+    if (!$('#modal-root .dialog')) render();
+    return;
+  }
   if (e.key === KEY || e.key === null) {
     stale = true;
     pending = null;
@@ -871,3 +987,8 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
     );
 }
 render();
+scheduleMarketRefresh();
+setInterval(scheduleMarketRefresh, 60000);
+document.addEventListener('visibilitychange', scheduleMarketRefresh);
+window.addEventListener('online', scheduleMarketRefresh);
+
