@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 
+test('offline cache placeholder is replaced by a build-specific version',async()=>{
+ const source=await readFile(new URL('../public/sw.js',import.meta.url),'utf8');
+ const script=await readFile(new URL('../scripts/cache.mjs',import.meta.url),'utf8');
+ assert.match(source,/const CACHE = 'lotbook-shell-v1'/);
+ assert.match(script,/source=source\.replace\("'lotbook-shell-v1'"/);
+});
+
 test('offline navigation preserves the app shell when visiting the guide',async()=>{
  const root='https://example.test/LotBook/', handlers={}, saved=new Map();
  const key=request=>typeof request==='string'?request:request.url;

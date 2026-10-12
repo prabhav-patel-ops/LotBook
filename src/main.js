@@ -125,7 +125,7 @@ async function refreshMarket(force = false) {
       updated++;
     } catch (error) {
       errors.push(`${symbol}: ${error.message}`);
-      if (/limit reached|key was rejected/.test(error.message)) break;
+      if (/limit reached|key was rejected|connection failed|timed out/.test(error.message)) break;
     }
   }
   if (localStorage.getItem(MARKET_KEY) !== key) { marketRefreshing = false; return; }
