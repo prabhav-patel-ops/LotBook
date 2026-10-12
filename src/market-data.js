@@ -78,6 +78,7 @@ export async function fetchIndianQuote(symbol, apiKey, fetcher = fetch) {
     return parseIndianQuote(await response.json(), symbol);
   } catch (error) {
     if (error.name === 'AbortError') throw Error('Quote request timed out. Stored prices were not changed.');
+    if (error instanceof TypeError) throw Error('Quote connection failed in this browser. Reopen LotBook while online and try again; no prices were changed.');
     throw error;
   } finally { clearTimeout(timeout); }
 }
