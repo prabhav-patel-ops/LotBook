@@ -54,12 +54,18 @@ export function validateTransaction(t) {
   if (t.note !== undefined && typeof t.note !== 'string') throw new Error('note must be a string');
   const normalized = {
     id, symbol, name: t.name?.trim() || symbol, date: dateValue(t.date), side,
-    quantity: number(t.quantity, 'quantity', true), price: number(t.price, 'price', true),
+    quantity: number(t.quantity, 'quantity', true), price: number(t.price, 'price', t.corporateAction !== 'BONUS'),
     charges: number(t.charges === undefined ? 0 : t.charges, 'charges'),
     purpose: t.purpose, note: t.note ?? '',
     // Old zero placeholders do not establish that the broker charged nothing.
     chargesKnown: typeof t.chargesKnown==='boolean' ? t.chargesKnown : Number(t.charges)>0,
   };
+  if (t.corporateAction !== undefined) {
+    if (t.corporateAction !== 'BONUS' || side !== 'BUY' || normalized.price !== 0 || normalized.charges !== 0)
+      throw new Error('Invalid bonus-share transaction');
+    normalized.corporateAction = 'BONUS';
+    normalized.chargesKnown = true;
+  }
   for (const field of ['isin','exchange','orderId','exchangeOrderId','tradeId']) {
     if(t[field]!==undefined){if(typeof t[field]!=='string'||t[field].length>200)throw Error(`Invalid ${field}`);normalized[field]=t[field].trim();}
   }
