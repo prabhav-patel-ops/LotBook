@@ -128,7 +128,7 @@
         </li>
         <li>
           Purchase lots classified as Core or Trading, a holdings dashboard,
-          optional free IndianAPI quotes with source/fetch-time labels, manual
+          keyless Yahoo/Jina fallback or optional IndianAPI quotes with source/time labels, manual
           stock-price fallback, and manually entered cash balance.
         </li>
         <li>
@@ -249,7 +249,7 @@
         </li>
         <li>
           Tap a stock for every purchase lot and its remaining balance. Update
-          a manual price or connect a free IndianAPI key in Settings. Quotes
+          a manual price or tap Refresh prices for the keyless fallback. You may also add an IndianAPI key in Settings. Quotes
           refresh only while the app is open; check each holding’s source and
           fetched time before relying on a value.
         </li>
@@ -269,8 +269,8 @@
         Your name, parsed transactions, quotes, snapshots and notes are stored
         in this browser’s local storage. Original statements are read in memory
         and discarded after parsing. Financial records are never uploaded to
-        GitHub, analytics, or an AI service. If you enable market quotes,
-        IndianAPI receives the requested ticker and your API key, but no share
+        GitHub or analytics. Quote requests send only tickers to IndianAPI or Yahoo through Jina Reader;
+        an optional IndianAPI key goes only to IndianAPI, but no share
         quantities, trades, notes or statements. The key and fetched quotes stay
         on this device outside diary backups. GitHub Pages receives normal
         requests for app files. The app uses locally bundled libraries,
@@ -295,7 +295,7 @@
       <h2>Scope and known limits</h2>
       <p>
         Equity long positions only. No broker connection, guaranteed real-time quotes, actual
-        order execution, dividend accounting, tax filing, corporate actions,
+        order execution, dividend accounting, tax filing, corporate actions other than the verified LICI 1:1 bonus,
         transfer reconstruction, mutual funds, F&amp;O, margin or short-selling
         support. Imported sales initially use FIFO until specifically recorded
         with a diary lot allocation. Past sales can be rematched only to lots
@@ -335,4 +335,3 @@
     </main>
   </body>
 </html>
-
