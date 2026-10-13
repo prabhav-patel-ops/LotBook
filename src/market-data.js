@@ -31,7 +31,50 @@ export function readMarketCache(storage) {
 export function usableMarketQuote(quote, now = Date.now()) {
   if (!quote || !Number.isFinite(quote.price) || quote.price <= 0) return false;
   const age = now - Date.parse(quote.fetchedAt);
-  return Number.isFinite(age) && age >= -5 * 60 * 1000 && age <= MARKET_MAX_AGE_MS;
+  const marketAge = quote.marketAt ? now - Date.parse(quote.marketAt) : age;
+  return Number.isFinite(age) && age >= -5 * 60 * 1000 && age <= MARKET_MAX_AGE_MS &&
+    Number.isFinite(marketAge) && marketAge >= -5 * 60 * 1000 && marketAge <= MARKET_MAX_AGE_MS;
+}
+
+/** Temporary keyless personal-use fallback. Only the ticker is sent to Jina/Yahoo. */
+export function parseYahooQuote(payload, symbol, fetchedAt = new Date().toISOString()) {
+  const wanted = marketTicker(symbol);
+  const suffix = wanted?.exchange === 'BSE' ? '.BO' : '.NS';
+  const result = payload?.chart?.result?.[0];
+  const meta = result?.meta;
+  if (!wanted || payload?.chart?.error || meta?.symbol !== `${wanted.ticker}${suffix}` || meta?.currency !== 'INR')
+    throw Error(`Yahoo quote identity or currency could not be verified for ${symbol}.`);
+  const price = Number(meta.regularMarketPrice);
+  const stamp = Number(meta.regularMarketTime) * 1000;
+  if (!Number.isFinite(stamp) || stamp <= 0) throw Error(`Yahoo returned no market timestamp for ${symbol}.`);
+  const marketAt = new Date(stamp).toISOString();
+  if (!Number.isFinite(price) || price <= 0 || !usableMarketQuote({price,fetchedAt,marketAt}))
+    throw Error(`Yahoo returned no usable recent market price for ${symbol}.`);
+  return {price,fetchedAt,marketAt,exchange:wanted.exchange,source:'Yahoo via Jina (unofficial)'};
+}
+
+export async function fetchYahooFallback(symbol, fetcher = fetch) {
+  const mapped = marketTicker(symbol);
+  if (!mapped) throw Error(`Unsupported market symbol ${symbol}.`);
+  const suffix = mapped.exchange === 'BSE' ? '.BO' : '.NS';
+  const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(mapped.ticker + suffix)}?range=1d%26interval=1d`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetcher(`https://r.jina.ai/${target}`, {
+      headers:{'X-No-Cache':'true',accept:'text/plain'},signal:controller.signal,cache:'no-store',
+    });
+    if (!response.ok) throw Error(`Free quote relay returned ${response.status}.`);
+    const text = await response.text();
+    const marker = text.indexOf('Markdown Content:');
+    const start = text.indexOf('{', marker);
+    if (marker < 0 || start < 0 || text.length > 100000) throw Error('Free quote relay returned an unexpected format.');
+    return parseYahooQuote(JSON.parse(text.slice(start).trim()), symbol);
+  } catch(error) {
+    if (error.name === 'AbortError') throw Error('Free quote request timed out.');
+    if (error instanceof TypeError || error instanceof SyntaxError) throw Error('Free quote relay could not be read in this browser.');
+    throw error;
+  } finally { clearTimeout(timeout); }
 }
 
 export function resolveHoldingPrice(symbol, manualPrices, marketQuotes, connected, now = Date.now()) {
@@ -82,4 +125,3 @@ export async function fetchIndianQuote(symbol, apiKey, fetcher = fetch) {
     throw error;
   } finally { clearTimeout(timeout); }
 }
-

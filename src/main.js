@@ -4,8 +4,8 @@ import { parseStatement, parseRows } from "./importer.js";
 import { parseReferenceStatement, summarizeReferenceEntries } from "./reference-reports.js";
 import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js";
 import { csvCell, allocateLots } from "./ui-logic.js";
-import { planTransactions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
-import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote } from "./market-data.js";
+import { prepareTradeReplacement, applyKnownCorporateActions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
+import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote, fetchYahooFallback } from "./market-data.js";
 const $ = (s) => document.querySelector(s),
   esc = (s) =>
     String(s ?? "").replace(
@@ -60,17 +60,18 @@ try {
     "Your saved diary could not be read. It has not been overwritten. Export the stored file below, then restore a valid backup. " +
     e.message;
 }
-const priceFor = (symbol) => resolveHoldingPrice(symbol, state.prices, marketQuotes, Boolean(localStorage.getItem(MARKET_KEY)));
+const priceFor = (symbol) => resolveHoldingPrice(symbol, state.prices, marketQuotes, true);
 const live = () => analyse(state.transactions, Object.fromEntries(
   [...new Set([...Object.keys(state.prices), ...Object.keys(marketQuotes)])]
     .filter(symbol => priceFor(symbol) != null).map(symbol => [symbol, priceFor(symbol)]),
 ));
 const quoteDetail = symbol => {
   const quote = marketQuotes[symbol];
-  if (localStorage.getItem(MARKET_KEY) && usableMarketQuote(quote)) {
-    const when = new Date(quote.fetchedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
-    const old = Date.now() - Date.parse(quote.fetchedAt) > 24 * 60 * 60 * 1000;
-    return `${old ? 'Older quote · ' : ''}${quote.source || 'IndianAPI'} · fetched ${when} · market time unverified`;
+  if (usableMarketQuote(quote)) {
+    const marketTime = quote.marketAt || quote.fetchedAt;
+    const when = new Date(marketTime).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+    const old = Date.now() - Date.parse(marketTime) > 24 * 60 * 60 * 1000;
+    return `${old ? 'Older quote · ' : ''}${quote.source || 'IndianAPI'} · ${quote.marketAt?'market':'fetched'} ${when}${quote.marketAt?'':' · market time unverified'}`;
   }
   return state.prices[symbol] ? `Manual · entered ${state.prices[symbol].date || 'date unknown'}` : 'No price available';
 };
@@ -94,7 +95,7 @@ const marketIsOpen = () => {
 };
 async function refreshMarket(force = false) {
   const key = localStorage.getItem(MARKET_KEY);
-  if (!key || demo || loadError || !state.profile || !state.onboarded || marketRefreshing) return;
+  if (demo || loadError || !state.profile || !state.onboarded || marketRefreshing) return;
   if (!navigator.onLine) {
     if (force) { marketMessage = 'Offline. Stored manual or recent quotes remain available.'; render(); }
     return;
@@ -116,17 +117,18 @@ async function refreshMarket(force = false) {
   if (!$('#modal-root .dialog')) render();
   let updated = 0;
   const errors = [];
+  let keyFailed = false;
   for (const symbol of due) {
     if (localStorage.getItem(MARKET_KEY) !== key) break;
     marketAttempts[symbol] = now;
     if (!marketTicker(symbol)) { errors.push(`${symbol}: no matching market ticker`); continue; }
     try {
-      marketQuotes[symbol] = await fetchIndianQuote(symbol, key);
+      if (key && !keyFailed) {
+        try { marketQuotes[symbol] = await fetchIndianQuote(symbol, key); }
+        catch(error) { keyFailed = true; marketQuotes[symbol] = await fetchYahooFallback(symbol); }
+      } else marketQuotes[symbol] = await fetchYahooFallback(symbol);
       updated++;
-    } catch (error) {
-      errors.push(`${symbol}: ${error.message}`);
-      if (/limit reached|key was rejected|connection failed|timed out/.test(error.message)) break;
-    }
+    } catch (error) { errors.push(`${symbol}: ${error.message}`); }
   }
   if (localStorage.getItem(MARKET_KEY) !== key) { marketRefreshing = false; return; }
   try { localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(marketQuotes)); }
@@ -136,7 +138,7 @@ async function refreshMarket(force = false) {
   if (!$('#modal-root .dialog')) render();
 }
 function scheduleMarketRefresh() {
-  if (!localStorage.getItem(MARKET_KEY) || !state.onboarded || demo) return;
+  if (!state.onboarded || demo) return;
   if (document.visibilityState !== 'visible' || $('#modal-root .dialog') ||
       document.activeElement?.matches('input, textarea, select')) return;
   if (!marketLastAttempt || marketIsOpen()) refreshMarket();
@@ -226,15 +228,14 @@ function welcome() {
 `<div class="welcome-wrap"><section class="welcome-art"><div class="brand"><span class="logo light">L</span> Lotbook</div><div class="eyebrow">YOUR SHARES. YOUR STORY.</div><h1>Know the story<br>behind every trade.</h1><p>A personal space for your core holdings,<br>trading cycles, and everything in between.</p><div class="paper"><span class="eyebrow">A LITTLE LOT CLARITY</span><div class="paper-row">Core holding <b>10 shares · ₹1,300</b></div><div class="paper-row">Trading purchase <b>10 shares · ₹1,250</b></div><div class="paper-row">Trading sale <b>10 shares · ₹1,270</b></div><div class="paper-result">One completed cycle <strong>+₹200</strong></div><small>Synthetic example · before charges</small></div><p class="privacy">● Diary data stays on this device.</p></section><section class="welcome-form"><span class="step-label">LET’S MAKE THIS YOURS</span><h2>Welcome to Lotbook.</h2><p>Your diary starts with a name.<br>No passwords. No broker credentials.</p><form id="welcome-form"><label>Your name<input name="name" maxlength="60" placeholder="What should we call you?" autocomplete="given-name" required></label><button class="full">Start my diary →</button></form><p class="fine">This is a local profile, not an authenticated account. Anyone with access to this browser can open it.</p><button class="text-button" data-action="demo">Explore a sample diary</button></section></div>`;
 }
 function marketPanel(a) {
-  const connected = Boolean(localStorage.getItem(MARKET_KEY));
-  const linked = a.holdings.filter(h => connected && h.quantity > 0 && usableMarketQuote(marketQuotes[h.symbol])).length;
+  const linked = a.holdings.filter(h => h.quantity > 0 && usableMarketQuote(marketQuotes[h.symbol])).length;
   const count = a.holdings.filter(h => h.quantity > 0).length;
-  const older = a.holdings.filter(h => connected && h.quantity > 0 && usableMarketQuote(marketQuotes[h.symbol]) && Date.now() - Date.parse(marketQuotes[h.symbol].fetchedAt) > 24 * 60 * 60 * 1000).length;
-return `<section class="panel mini market-panel"><div class="panel-title"><div><h2>Market-linked prices</h2><span>${linked} of ${count} holdings quoted · manual prices fill gaps</span></div><button class="secondary" data-action="refreshquotes" ${!connected || marketRefreshing ? 'disabled' : ''}>${marketRefreshing ? 'Updating…' : 'Refresh prices'}</button></div><p>${connected ? `IndianAPI quotes are fetched only while this app is open. Automatic checks run every ${marketIntervalMs(localStorage) / 60000} minutes during NSE market hours; refresh manually whenever needed. Free API limits may restrict updates.` : 'Automatic prices are not connected. Add a free IndianAPI key in Settings; your existing manual prices remain available.'}</p>${older ? `<p class="notice" role="status">${older} quote${older === 1 ? ' is' : 's are'} over 24 hours old. Treat the displayed value as historical, not live.</p>` : ''}${marketMessage ? `<p class="${/issue/.test(marketMessage) ? 'notice error' : 'fine'}" role="status">${esc(marketMessage)}</p>` : ''}<p class="fine">Fetched time is when your device requested a quote, not a verified market-trade timestamp. Quotes may be delayed. If a quote is over seven days old, LotBook stops using it in valuation. No share counts or trade history are sent to the quote service.</p>${!connected ? '<button class="secondary" data-view="settings">Connect free quotes</button>' : ''}</section>`;
+  const older = a.holdings.filter(h => h.quantity > 0 && usableMarketQuote(marketQuotes[h.symbol]) && Date.now() - Date.parse(marketQuotes[h.symbol].marketAt || marketQuotes[h.symbol].fetchedAt) > 24 * 60 * 60 * 1000).length;
+  return `<section class="panel mini market-panel"><div class="panel-title"><div><h2>Market-linked prices</h2><span>${linked} of ${count} holdings quoted · manual prices fill gaps</span></div><button class="secondary" data-action="refreshquotes" ${marketRefreshing ? 'disabled' : ''}>${marketRefreshing ? 'Updating…' : 'Refresh prices'}</button></div><p>Free keyless Yahoo fallback is active for personal use. If you have an IndianAPI key, it is tried first. Automatic checks run every ${marketIntervalMs(localStorage) / 60000} minutes while the app is open during NSE hours.</p>${older ? `<p class="notice" role="status">${older} quote${older === 1 ? ' is' : 's are'} over 24 hours old. Treat displayed values as historical, not live.</p>` : ''}${marketMessage ? `<p class="${/issue/.test(marketMessage) ? 'notice error' : 'fine'}" role="status">${esc(marketMessage)}</p>` : ''}<p class="fine">Yahoo quotes are unofficial, may be delayed or unavailable, and pass through Jina Reader. Only stock tickers go to the quote services; never your share counts, statements or diary. Verify important values with Groww.</p></section>`;
 }
 function stats(a) {
   const enteredValue = a.totals.unpriced && a.holdings.every(h => h.currentPrice === null) ? null : a.totals.currentValue;
-  return `<div class="stats"><div class="stat-card featured"><span>Holdings cost</span><strong>${money(a.totals.invested)}</strong><small>Cost of remaining purchase lots</small></div><div class="stat-card"><span>Value at available prices</span><strong>${money(enteredValue)}</strong><small>${a.totals.unpriced ? "Incomplete · missing prices: " + a.totals.unpriced : "IndianAPI or manual prices · see source and age below"}</small></div><div class="stat-card"><span>Result after recorded costs</span><strong class="${tone(a.totals.realizedNet)}">${money(a.totals.realizedNet)}</strong><small>Selected lots · ${a.cycles.length} closures · before income tax</small></div><div class="stat-card"><span>Diary FIFO comparison</span><strong class="${tone(a.totals.fifoNet)}">${money(a.totals.fifoNet)}</strong><small>Diary comparison · not verified broker / tax FIFO</small></div></div>${a.totals.unknownCharges?`<div class="notice">Charges are unknown for ${a.totals.unknownCharges} transactions. Results after recorded costs are provisional; enter actual costs in Diary. Legacy zero charges remain unknown until verified.</div>`:'<p class="fine">Results include only recorded transaction costs, before personal income tax. Verify cost coverage independently.</p>'}`;
+  return `<div class="stats"><div class="stat-card featured"><span>Holdings cost</span><strong>${money(a.totals.invested)}</strong><small>Cost of remaining purchase lots</small></div><div class="stat-card"><span>Value at available prices</span><strong>${money(enteredValue)}</strong><small>${a.totals.unpriced ? "Incomplete · missing prices: " + a.totals.unpriced : "Market or manual prices · see source and age below"}</small></div><div class="stat-card"><span>Result after recorded costs</span><strong class="${tone(a.totals.realizedNet)}">${money(a.totals.realizedNet)}</strong><small>Selected lots · ${a.cycles.length} closures · before income tax</small></div><div class="stat-card"><span>Diary FIFO comparison</span><strong class="${tone(a.totals.fifoNet)}">${money(a.totals.fifoNet)}</strong><small>Diary comparison · not verified broker / tax FIFO</small></div></div>${a.totals.unknownCharges?`<div class="notice">Charges are unknown for ${a.totals.unknownCharges} transactions. Results after recorded costs are provisional; enter actual costs in Diary. Legacy zero charges remain unknown until verified.</div>`:'<p class="fine">Results include only recorded transaction costs, before personal income tax. Verify cost coverage independently.</p>'}`;
 }
 function holdings(a) {
   const list = a.holdings.filter(
@@ -332,10 +333,10 @@ function infoContent(a) {
 }
 function marketSettings() {
   const connected = Boolean(localStorage.getItem(MARKET_KEY));
-return `<section class="panel mini"><h2>Free market prices</h2><p>${connected ? 'A quote key is saved on this device only. It is not included in diary backups.' : 'Create a free IndianAPI account, subscribe to its free stock API plan, and paste the key below.'} LotBook asks for one NSE/BSE ticker at a time. It does not send your name, quantities, transactions, notes, or Groww files.</p><form id="market-key-form"><label>Refresh while app is open<select name="refreshMinutes">${[15,30,60,120].map(n=>`<option value="${n}" ${marketIntervalMs(localStorage)/60000===n?'selected':''}>Every ${n} minutes</option>`).join('')}</select></label><label>IndianAPI key<input name="marketKey" type="password" autocomplete="off" placeholder="Paste free API key" required maxlength="300"></label><button>${connected ? 'Replace key' : 'Connect quotes'}</button></form>${connected ? '<button class="secondary" data-action="clearmarketkey">Disconnect quote API</button>' : ''}<p class="fine">The 15-minute setting uses more free API credits, especially with many holdings. Key and quote cache live only in this browser. Anyone with access to this browser profile could read the key. Never paste it in chat or commit it to GitHub. <a href="https://indianapi.in/indian-stock-market" target="_blank" rel="noopener noreferrer">Get a free key ↗</a></p>${marketMessage ? `<p class="notice" role="status">${esc(marketMessage)}</p>` : ''}</section>`;
+return `<section class="panel mini"><h2>Free market prices</h2><p>The keyless Yahoo/Jina fallback is available now; an IndianAPI key is optional. Only stock tickers are requested, never holdings quantities or statement contents. The relay and quote source can see which tickers you request.</p><form id="market-key-form"><label>Refresh while app is open<select name="refreshMinutes">${[15,30,60,120].map(n=>`<option value="${n}" ${marketIntervalMs(localStorage)/60000===n?'selected':''}>Every ${n} minutes</option>`).join('')}</select></label><label>IndianAPI key (optional)<input name="marketKey" type="password" autocomplete="off" placeholder="Leave blank for keyless quotes" maxlength="300"></label><button>Save quote settings</button></form>${connected ? '<button class="secondary" data-action="clearmarketkey">Remove saved IndianAPI key</button>' : ''}<p class="fine">Yahoo via Jina is an unofficial, best-effort personal-use fallback; it may be delayed or unavailable. Your key and quote cache stay in this browser and are not exported. Never paste a key in chat or commit one to GitHub. <a href="https://indianapi.in/indian-stock-market" target="_blank" rel="noopener noreferrer">IndianAPI ↗</a></p>${marketMessage ? `<p class="notice" role="status">${esc(marketMessage)}</p>` : ''}</section>`;
 }
 function settings() {
-  return `${marketSettings()}<div class="two-col"><section class="panel mini"><h2>Your local profile</h2><form id="profile-form"><label>Name<input name="name" value="${esc(state.profile)}" maxlength="60" required></label><button>Save name</button></form><p>A convenience profile on this browser. No password or cloud account.</p></section><section class="panel mini"><h2>Install Lotbook</h2><p>On Android, open this site in Chrome and use Install app or the menu → Add to Home screen. On iPhone use Safari → Share → Add to Home Screen.</p><button data-action="install">Install / instructions</button><small>Install prompts depend on your browser. Offline use works after the app has loaded online.</small></section><section class="panel mini"><h2>Keep a backup</h2><p>Export a JSON diary for another device. Import replaces this diary only after validation and confirmation.</p><button data-action="export">Export backup</button><label class="button secondary">Import backup<input type="file" id="restore" accept=".json" hidden></label><button class="text-button" data-action="csv">Export transactions CSV</button></section><section class="panel mini"><h2>Privacy &amp; data</h2><p>Parsed records live in this browser’s local storage. Statements are processed in memory and are never sent to our servers or GitHub. No analytics, external fonts, ads, or broker connection. Enabling quotes sends only tickers and your key to IndianAPI; it never sends your share counts or diary.</p><p>Public GitHub hosts the app files and receives ordinary web requests. It does not receive your name or financial records. Shared devices and browser clearing can expose or erase local data.</p><button class="danger secondary" data-action="clear">Clear all local data</button></section></div><section class="panel mini"><h2>App updates · v${__APP_VERSION__}</h2><p>After changes are published, refresh to load the latest app. Export before changing browsers or clearing website data.</p><button data-action="checkupdate">Check for app update</button><button class="secondary" data-action="refresh">Refresh app</button></section><section class="panel mini"><h2>Understand the numbers</h2><p>Selecting a purchase lot changes realised and unrealised attribution in your diary. It does not change the shares actually sold through Groww, broker FIFO records, or total wealth. Verify charges and broker records independently. Market prices may be delayed or unavailable, and cash is still entered manually. Check each quote source and fetched time.</p><a href="./guide.html" target="_blank">Read the app flow and limitations ↗</a></section>`;
+  return `${marketSettings()}<div class="two-col"><section class="panel mini"><h2>Your local profile</h2><form id="profile-form"><label>Name<input name="name" value="${esc(state.profile)}" maxlength="60" required></label><button>Save name</button></form><p>A convenience profile on this browser. No password or cloud account.</p></section><section class="panel mini"><h2>Install Lotbook</h2><p>On Android, open this site in Chrome and use Install app or the menu → Add to Home screen. On iPhone use Safari → Share → Add to Home Screen.</p><button data-action="install">Install / instructions</button><small>Install prompts depend on your browser. Offline use works after the app has loaded online.</small></section><section class="panel mini"><h2>Keep a backup</h2><p>Export a JSON diary for another device. Import replaces this diary only after validation and confirmation.</p><button data-action="export">Export backup</button><label class="button secondary">Import backup<input type="file" id="restore" accept=".json" hidden></label><button class="text-button" data-action="csv">Export transactions CSV</button></section><section class="panel mini"><h2>Privacy &amp; data</h2><p>Parsed records live in this browser’s local storage. Statements are processed in memory and are never sent to our servers or GitHub. No analytics, external fonts, ads, or broker connection. Quotes send only requested tickers to IndianAPI or to Yahoo through Jina Reader; an optional IndianAPI key goes only to IndianAPI. No share counts or diary are sent.</p><p>Public GitHub hosts the app files and receives ordinary web requests. It does not receive your name or financial records. Shared devices and browser clearing can expose or erase local data.</p><button class="danger secondary" data-action="clear">Clear all local data</button></section></div><section class="panel mini"><h2>App updates · v${__APP_VERSION__}</h2><p>After changes are published, refresh to load the latest app. Export before changing browsers or clearing website data.</p><button data-action="checkupdate">Check for app update</button><button class="secondary" data-action="refresh">Refresh app</button></section><section class="panel mini"><h2>Understand the numbers</h2><p>Selecting a purchase lot changes realised and unrealised attribution in your diary. It does not change the shares actually sold through Groww, broker FIFO records, or total wealth. Verify charges and broker records independently. Market prices may be delayed or unavailable, and cash is still entered manually. Check each quote source and fetched time.</p><a href="./guide.html" target="_blank">Read the app flow and limitations ↗</a></section>`;
 }
 function modal(title, body) {
   $("#modal-root").innerHTML =
@@ -499,13 +500,17 @@ function importPreview() {
   const warnings = (p.warnings || []).map((w) =>
     typeof w === "string" ? w : w.message || JSON.stringify(w),
   );
-  const plan=p.transactions?.length?planTransactions(state.transactions,p.transactions):null;
+  const plan=p.transactions?.length?prepareTradeReplacement(p.transactions):null;
   const blockers=[...(p.blockingErrors||[]),...(plan?.conflicts||[]),...(plan?.errors||[]).map(e=>e.message)];
   const labels={symbol:'Stock symbol',date:'Execution date',side:'Buy / sell',quantity:'Quantity',price:p.kind==='holdings'?'Average buy price (optional)':'Price per share (optional if total value)',tradeValue:'Gross total trade value (optional if price)',charges:'Total charges (optional)',companyName:'Company name (optional)',isin:'ISIN (optional)',tradeTime:'Execution time (optional)',tradeQuantity:'Executed quantity (optional)',status:'Order status (optional)',exchange:'Exchange (optional)',orderId:'Order ID (optional)',exchangeOrderId:'Exchange order ID (optional)',tradeId:'Trade / execution ID (optional)'};
   const fields=p.kind==='trades'?['symbol','date','side','quantity','price','tradeValue','charges','companyName','isin','tradeTime','tradeQuantity','status','exchange','orderId','exchangeOrderId','tradeId']:['symbol','quantity','price','isin'];
   const mapping=!p.fatal&&p.headers?.length?`<details ${p.mappingRequired?'open':''}><summary>Review or change column mapping</summary><form id="mapping-form"><div class="form-grid">${fields.map(k=>`<label>${labels[k]}<select name="${k}"><option value="">Not supplied</option>${p.headers.map((h,i)=>`<option value="${i}" ${p.columns?.[k]===i?'selected':''}>${esc(h)}</option>`).join('')}</select></label>`).join('')}</div><button>Read matched columns</button></form></details>`:'';
   const issues=(p.rowIssues||[]).length;
   const valueBasis=p.transactions?.some(t=>t.priceSource==='trade-value');
+  if (plan) {
+    modal('Replace diary from broker history', `<div class="notice"><b>${state.transactions.length} existing diary trades will be removed.</b> This includes manual test trades such as Reliance. The ${plan.added} executed trades in this file will become the entire diary history; old snapshots, reference reports, manual prices, cash and import logs will also be cleared. Export a backup first if you may need them.</div>${warnings.length?`<details open><summary>${warnings.length} file notes</summary><ul>${warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></details>`:''}${blockers.length?`<div class="notice error" role="alert">Import blocked: ${blockers.slice(0,8).map(esc).join('<br>')}</div>`:''}${mapping}<p><b>${plan.added} executed trades</b>${plan.applied.length?` · ${plan.applied.length} verified bonus event added`:''}</p><div class="preview-list">${p.transactions.map((t,i)=>`<div class="preview-row"><div><b>${esc(t.symbol)} · ${esc(t.side)}</b><small>${esc(t.date)} ${esc(t.tradeTime||'')}</small><small>${num(t.quantity)} × ${money(t.price)}</small></div>${t.side==='BUY'?`<select class="import-purpose" data-index="${i}" aria-label="Purpose for ${esc(t.symbol)}"><option value="core" ${t.purpose!=='trading'?'selected':''}>Core</option><option value="trading" ${t.purpose==='trading'?'selected':''}>Trading</option></select>`:''}</div>`).join('')}</div><label class="check-label"><input type="checkbox" id="executed-confirm">This is my complete executed equity order history and I want to replace the old diary.</label>${valueBasis?'<label class="check-label"><input type="checkbox" id="value-confirm">The source Value is the gross executed amount excluding charges.</label>':''}${issues?'<label class="check-label"><input type="checkbox" id="issues-confirm">I reviewed excluded rows and accept that this history may be incomplete.</label>':''}<button class="full" data-action="confirmimport" ${p.fatal||blockers.length?'disabled':''}>Replace diary with statement</button>`);
+    return;
+  }
   modal(
     "Review your statement",
     `<div class="notice">Nothing has been saved yet. ${p.selectedSheet?`Worksheet: <b>${esc(p.selectedSheet)}</b>. `:''}Review the ${esc(p.kind)} below.</div>${warnings.length?`<details open><summary>${warnings.length} warnings · ${issues} rows need review</summary><ul>${warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></details>`:''}${blockers.length?`<div class="notice error" role="alert"><b>Import blocked. Nothing will be saved.</b><p>${blockers.slice(0,12).map(esc).join('<br>')}</p><p>Correct the report or upload the missing older purchases. Do not invent a backdated purchase from today's holdings.</p></div>`:''}${mapping}${p.text?`<details><summary>Extracted PDF text (local only)</summary><pre>${esc(p.text.slice(0,18000))}</pre></details>`:''}<p><b>${p.transactions?.length||0} readable transactions</b> · <b>${p.holdings?.length||0} snapshot rows</b></p>${plan?`<div class="notice"><b>${plan.added} new · ${plan.skipped} matched / repeated · ${plan.updated} existing records enriched</b><p>Separate identical fills within a first upload are retained. Without execution IDs, overlapping identical trades are matched by occurrence count: review this count before confirming.</p></div><p class="fine">Same-day trades use execution times only when every trade that day has a time; otherwise source order is retained. Sale allocations and IDs on matched records are preserved.</p><div class="preview-list">${p.transactions.map((t,i)=>`<div class="preview-row"><div><b>${esc(t.symbol)} · ${esc(t.side)}</b><small>${esc(t.name||'')} · ${esc(t.date)} ${esc(t.tradeTime||'')}</small><small>${num(t.quantity)} × ${money(t.price)}${t.priceSource==='trade-value'?` · Total ${money(t.tradeValue)} ÷ quantity`:''} · Charges ${t.chargesKnown?money(t.charges):'unknown'}</small></div>${t.side==='BUY'?`<select class="import-purpose" data-index="${i}" aria-label="Purpose for imported ${esc(t.symbol)}"><option value="core" ${t.purpose!=='trading'?'selected':''}>Core</option><option value="trading" ${t.purpose==='trading'?'selected':''}>Trading</option></select>`:''}</div>`).join('')}</div><label class="check-label"><input type="checkbox" id="executed-confirm">This report contains actual executed equity trades, not pending orders.</label>${valueBasis?'<label class="check-label"><input type="checkbox" id="value-confirm">Value is the gross total for the executed quantity, excluding charges. I checked a source entry.</label>':''}${issues?'<label class="check-label"><input type="checkbox" id="issues-confirm">I reviewed the excluded rows and understand this import may be incomplete.</label>':''}<button class="full" data-action="confirmimport" ${p.fatal||blockers.length?'disabled':''}>Confirm transactions</button>`:p.holdings?.length?`${p.holdings.map(h=>`<div class="kv"><span>${esc(h.symbol)}</span><b>${num(h.quantity)} shares · Broker average ${money(h.avgPrice)}</b></div>`).join('')}${field('Snapshot as-of date','snapshotDate','date',today(),'id="snapshot-date" required')}<label class="check-label"><input type="checkbox" id="snapshot-complete">This is the complete holdings list for this account (missing stocks mean zero).</label><p class="fine">Leave unchecked for a partial list. No purchase history is created from this snapshot.</p>${issues?'<label class="check-label"><input type="checkbox" id="issues-confirm">I reviewed the excluded rows. The remaining snapshot may be incomplete.</label>':''}<button class="full" data-action="confirmimport" ${p.fatal||blockers.length?'disabled':''}>Save snapshot for reconciliation</button>`:'<p>No readable records found. Try a compatible CSV/XLSX report or the template.</p><button class="secondary" data-action="template">Download trade template</button>'}`,
@@ -513,6 +518,7 @@ function importPreview() {
 }
 function confirmImport() {
   const p=pending,next=structuredClone(state);
+  let replacedTrades=false;
   if(!p)throw Error('Choose a statement first.');
   if(p.reference){
     if(!p.entries?.length)throw Error('No readable reference rows were found. Nothing was saved.');
@@ -529,14 +535,23 @@ function confirmImport() {
   if(p.transactions?.length){
     if(!$('#executed-confirm')?.checked)throw Error('Confirm that these are executed equity trades.');
     if($('#value-confirm')&&!$('#value-confirm').checked)throw Error('Verify that Value is gross executed value, excluding charges, then confirm its basis.');
-    const plan=planTransactions(state.transactions,p.transactions);
+    const plan=prepareTradeReplacement(p.transactions);
     if(plan.conflicts.length||plan.errors.length)throw Error('Import not saved: '+(plan.conflicts[0]||plan.errors[0].message));
     next.transactions=plan.transactions;({added,skipped,updated}=plan);
+    next.snapshots=[];next.snapshotComplete=false;next.snapshotDate='';
+    next.referenceReports=[];next.prices={};next.cash=null;next.imports=[];
+    replacedTrades=true;
   }
   if(p.holdings?.length){
     const date=$('#snapshot-date')?.value;
     if(!date)throw Error('Enter the snapshot as-of date.');
     next.snapshots=normalizeSnapshots(p.holdings,next.transactions);
+    const action=applyKnownCorporateActions(next.transactions);
+    if(action.applied.length){
+      const before=reconcileHoldings(next.transactions,next.snapshots,{complete:false});
+      const after=reconcileHoldings(action.transactions,next.snapshots,{complete:false});
+      if(after.every(row=>Math.abs(row.difference)<1e-8) && before.some(row=>Math.abs(row.difference)>1e-8)) next.transactions=action.transactions;
+    }
     next.snapshotComplete=$('#snapshot-complete')?.checked===true;
     next.snapshotDate=date;
   }
@@ -547,10 +562,15 @@ function confirmImport() {
   });
   next.onboarded = true;
   commit(next);
+  if(replacedTrades){
+    marketQuotes={};marketAttempts={};
+    localStorage.removeItem(MARKET_CACHE_KEY);
+    render();
+  }
   pending = null;
   close();
   notify(
-    `Added ${added} trades. ${skipped} matched / repeated. ${updated} enriched. ${p.holdings?.length||0} snapshot rows saved.`,
+    `${p.transactions?.length?`Replaced diary with ${added} trades.`:''} ${p.holdings?.length||0} snapshot rows saved.`,
   );
 }
 document.addEventListener("click", (e) => {
@@ -680,7 +700,7 @@ document.addEventListener("click", (e) => {
       case "quote":
         modal(
           "Update manual price",
-          `<form id="quote-form">${field("Price per share (₹)", "price", "number", state.prices[selected]?.price || "", 'required min="0.01" step="any"')}<p class="fine">Manual prices are used when no recent market quote is available. Disconnect quotes in Settings to use manual prices only.</p><button>Save price</button></form>`,
+          `<form id="quote-form">${field("Price per share (₹)", "price", "number", state.prices[selected]?.price || "", 'required min="0.01" step="any"')}<p class="fine">Manual prices are used when no recent usable market quote is available.</p><button>Save price</button></form>`,
         );
         break;
       case "refreshquotes":
@@ -692,7 +712,7 @@ document.addEventListener("click", (e) => {
         localStorage.removeItem(MARKET_CACHE_KEY);
         localStorage.removeItem(MARKET_INTERVAL_KEY);
         marketQuotes = {};
-        marketMessage = 'Market feed disconnected. Manual prices are unchanged.';
+        marketMessage = 'IndianAPI key removed. Keyless Yahoo fallback remains available.';
         render();
         break;
       case "cash":
@@ -754,13 +774,13 @@ document.addEventListener("submit", (e) => {
         break;
       case "market-key-form":
         if (demo) throw Error('Exit the sample diary before connecting quotes.');
-        if (!d.marketKey || d.marketKey.trim().length < 8) throw Error('Enter your IndianAPI key from its dashboard.');
+        if (d.marketKey && d.marketKey.trim().length < 8) throw Error('The IndianAPI key appears too short. Leave blank for keyless quotes.');
         if (![15, 30, 60, 120].includes(Number(d.refreshMinutes))) throw Error('Choose a supported refresh interval.');
-        localStorage.setItem(MARKET_KEY, d.marketKey.trim());
+        if (d.marketKey?.trim()) localStorage.setItem(MARKET_KEY, d.marketKey.trim());
         localStorage.setItem(MARKET_INTERVAL_KEY, d.refreshMinutes);
-        marketMessage = 'Key saved on this device. Checking quotes…';
+        marketMessage = 'Quote settings saved. Checking prices…';
         render();
-        notify('Quote key saved on this device.');
+        notify('Quote settings saved on this device.');
         refreshMarket(true).catch(error => notify(error.message));
         break;
       case "buy-form":
@@ -991,4 +1011,3 @@ scheduleMarketRefresh();
 setInterval(scheduleMarketRefresh, 60000);
 document.addEventListener('visibilitychange', scheduleMarketRefresh);
 window.addEventListener('online', scheduleMarketRefresh);
-

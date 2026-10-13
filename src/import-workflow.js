@@ -55,6 +55,44 @@ export function planTransactions(existing, incoming, createId=()=>crypto.randomU
  return {transactions,added,skipped,updated,conflicts,errors};
 }
 
+// Exchange-verified events only. LICI's 2026 event was a 1:1 bonus, not a split.
+// Bonus shares are separate zero-cost lots; original acquisition cost is unchanged.
+export const KNOWN_BONUSES = [{symbol:'LICI',isin:'INE0J1Y01017',exDate:'2026-05-29',creditDate:'2026-06-01',ratio:1}];
+
+export function applyKnownCorporateActions(transactions) {
+ let next=transactions.map(t=>validateTransaction(t)), applied=[];
+ for(const event of KNOWN_BONUSES){
+  const eventId=`bonus:${event.symbol}:${event.creditDate}`;
+  if(next.some(t=>t.id===eventId||t.symbol===event.symbol&&t.corporateAction==='BONUS'&&t.date===event.creditDate))continue;
+  const before=next.filter(t=>t.date<event.exDate);
+  const pre=analyse(before);
+  if(pre.errors.length)continue;
+  const eligible=pre.holdings.find(h=>h.symbol===event.symbol)?.quantity||0;
+  if(eligible<=0)continue;
+  const source=before.find(t=>t.symbol===event.symbol);
+  if(before.some(t=>t.symbol===event.symbol&&t.isin&&t.isin!==event.isin))continue;
+  const bonus=validateTransaction({id:eventId,symbol:event.symbol,isin:event.isin,name:source?.name||event.symbol,
+    date:event.creditDate,side:'BUY',quantity:eligible*event.ratio,price:0,charges:0,chargesKnown:true,
+    purpose:source?.purpose||'core',corporateAction:'BONUS',note:'Verified 1:1 bonus; NSE ex/record date 2026-05-29.'});
+  next=[...next,bonus];applied.push(bonus);
+ }
+ return {transactions:next,applied};
+}
+
+/** A full broker order-history import replaces the diary, never merges test trades. */
+export function prepareTradeReplacement(incoming, createId=()=>crypto.randomUUID()) {
+ const imported=incoming.map(raw=>validateTransaction({...raw,id:createId(),purpose:raw.purpose||'core'}));
+ const {transactions,applied}=applyKnownCorporateActions(imported);
+ const errors=analyse(transactions).errors;
+ const seen=new Set();
+ for(const trade of imported){
+  const ref=tradeRef(trade);
+  if(ref&&seen.has(ref))errors.push({id:trade.id,message:`Duplicate source trade execution ${trade.tradeId} on ${trade.date}. Review the statement.`});
+  if(ref)seen.add(ref);
+ }
+ return {transactions,applied,errors,added:imported.length,skipped:0,updated:0,conflicts:[]};
+}
+
 /** Match reported identifiers exactly; never use fuzzy name guesses. */
 export function normalizeSnapshots(rows,transactions){
  const snapshots=[],symbols=new Set();
