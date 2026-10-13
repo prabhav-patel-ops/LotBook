@@ -3,7 +3,7 @@ import { analyse, validateTransaction, orderedTransactions } from "./ledger.js";
 import { parseStatement, parseRows } from "./importer.js";
 import { parseReferenceStatement, summarizeReferenceEntries } from "./reference-reports.js";
 import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js";
-import { csvCell, allocateLots } from "./ui-logic.js";
+import { csvCell, allocateLots, holdingReturnPercent } from "./ui-logic.js";
 import { prepareTradeReplacement, applyKnownCorporateActions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
 import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote, fetchYahooFallback } from "./market-data.js";
 const $ = (s) => document.querySelector(s),
@@ -38,6 +38,7 @@ let state,
   loadError = "",
   view = "holdings",
   query = "",
+  holdingMetric = "pnl",
   selected = "",
   pending = null,
   installPrompt = null,
@@ -74,6 +75,11 @@ const quoteDetail = symbol => {
     return `${old ? 'Older quote · ' : ''}${quote.source || 'IndianAPI'} · ${quote.marketAt?'market':'fetched'} ${when}${quote.marketAt?'':' · market time unverified'}`;
   }
   return state.prices[symbol] ? `Manual · entered ${state.prices[symbol].date || 'date unknown'}` : 'No price available';
+};
+const holdingMetricText = holding => {
+  if (holdingMetric === 'pnl') return money(holding.unrealized);
+  const value = holdingReturnPercent(holding.cost, holding.unrealized);
+  return value === null ? '—' : state.privacyMode ? '••••' : `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2, signDisplay: 'exceptZero' }).format(value)}%`;
 };
 const commit = (next) => {
   if (loadError) throw Error("Recover your existing diary before saving.");
@@ -245,7 +251,10 @@ function holdings(a) {
         h.symbol.toLowerCase().includes(query.toLowerCase()) ||
         h.name?.toLowerCase().includes(query.toLowerCase())),
   );
-  return `${stats(a)}${marketPanel(a)}<div class="info-bar"><span>ⓘ</span><p>Lot selection changes how your diary attributes a sale. Your broker records and actual economic gain stay the same. FIFO here is a comparison, not a tax report.</p></div><section class="panel"><div class="panel-title"><div><h2>Portfolio</h2><span>${a.holdings.filter((h) => h.quantity > 0).length} holdings <span class="dot">·</span> Tap a stock to see every purchase</span></div><input class="search" id="search" value="${esc(query)}" placeholder="Search your holdings" aria-label="Search holdings"></div>${list.length ? `<div class="holdings-head"><span>Stock / quantity</span><span>Average / cost</span><span>Price / value</span><span>Unrealised</span></div>${list.map((h) => `<button class="holding-row" data-stock="${esc(h.symbol)}"><div class="stock-main"><span class="stock-icon">${esc(h.symbol.slice(0, 2))}</span><div><b>${esc(h.name || h.symbol)}</b><small>${esc(h.symbol)} · ${num(h.quantity)} shares</small><span class="tag">${num(h.coreQuantity)} core · ${num(h.tradingQuantity)} trading</span></div></div><div><b>${money(h.averageCost)}</b><small>${money(h.cost)}</small></div><div><b>${money(h.currentPrice)}</b><small>${money(h.currentValue)}</small><small>${esc(quoteDetail(h.symbol))}</small></div><div><b class="${h.unrealized === null ? "" : tone(h.unrealized)}">${money(h.unrealized)}</b><small>View lots →</small></div></button>`).join("")}` : `<div class="empty"><span class="empty-icon">◫</span><h3>${query ? "No matching stocks" : "Your portfolio starts here"}</h3><p>Import your Groww order history, or add your first purchase.<br>Every purchase becomes a lot you can follow.</p><button data-action="buy">Add a purchase</button><button class="secondary" data-view="import">Import statements</button></div>`}</section>${reconciliation(a)}<div class="two-col"><section class="panel mini"><div class="panel-title"><h2>Cash balance</h2><button class="text-button" data-action="cash">Update</button></div><strong class="large">${money(state.cash)}</strong><p>Enter the balance shown in Groww manually. It is not reconstructed from equity trades.</p></section><section class="panel mini"><div class="panel-title"><h2>Your diary, your device</h2><span>↗</span></div><p>Export a backup regularly. Browser storage can be cleared or lost when you change devices.</p><button class="secondary" data-action="export">Export my diary</button></section></div>`;
+  const rows = list.length
+    ? `<div class="holdings-head"><span>Stock / price</span><span>Average / cost</span><span>Value / quote</span><span>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Unrealised return'}</span></div>${list.map((h) => `<button class="holding-row" data-stock="${esc(h.symbol)}"><div class="stock-main"><span class="stock-icon">${esc(h.symbol.slice(0, 2))}</span><div><b>${esc(h.name || h.symbol)}</b><small>${esc(h.symbol)} · ${num(h.quantity)} shares</small><small class="stock-price">Price ${money(h.currentPrice)} / share</small><small class="stock-quote">${esc(quoteDetail(h.symbol))}</small><span class="tag">${num(h.coreQuantity)} core · ${num(h.tradingQuantity)} trading</span></div></div><div><b>${money(h.averageCost)}</b><small>${money(h.cost)}</small></div><div><b>${money(h.currentValue)}</b><small>Value at available price</small></div><div><b class="${h.unrealized === null ? "" : tone(h.unrealized)}">${holdingMetricText(h)}</b><small>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Return on remaining cost'}</small><small>View lots →</small></div></button>`).join("")}`
+    : `<div class="empty"><span class="empty-icon">◫</span><h3>${query ? "No matching stocks" : "Your portfolio starts here"}</h3><p>Import your Groww order history, or add your first purchase.<br>Every purchase becomes a lot you can follow.</p><button data-action="buy">Add a purchase</button><button class="secondary" data-view="import">Import statements</button></div>`;
+  return `${stats(a)}${marketPanel(a)}<div class="info-bar"><span>ⓘ</span><p>Lot selection changes how your diary attributes a sale. Your broker records and actual economic gain stay the same. FIFO here is a comparison, not a tax report.</p></div><section class="panel"><div class="panel-title portfolio-title"><div><h2>Portfolio</h2><span>${a.holdings.filter((h) => h.quantity > 0).length} holdings <span class="dot">·</span> Tap a stock to see every purchase</span></div><div class="portfolio-controls"><input class="search" id="search" value="${esc(query)}" placeholder="Search your holdings" aria-label="Search holdings"><div class="metric-switch" role="group" aria-label="Holding result display"><button data-action="holdingmetric" data-metric="pnl" aria-pressed="${holdingMetric === 'pnl'}" class="${holdingMetric === 'pnl' ? 'active' : ''}">P&L</button><button data-action="holdingmetric" data-metric="returns" aria-pressed="${holdingMetric === 'returns'}" class="${holdingMetric === 'returns' ? 'active' : ''}">Returns %</button></div></div></div>${rows}</section>${reconciliation(a)}<div class="two-col"><section class="panel mini"><div class="panel-title"><h2>Cash balance</h2><button class="text-button" data-action="cash">Update</button></div><strong class="large">${money(state.cash)}</strong><p>Enter the balance shown in Groww manually. It is not reconstructed from equity trades.</p></section><section class="panel mini"><div class="panel-title"><h2>Your diary, your device</h2><span>↗</span></div><p>Export a backup regularly. Browser storage can be cleared or lost when you change devices.</p><button class="secondary" data-action="export">Export my diary</button></section></div>`;
 }
 function reconciliation(a) {
   if (!state.snapshots.length && !state.snapshotComplete) return "";
@@ -588,6 +597,13 @@ document.addEventListener("click", (e) => {
   const symbol = el.dataset.stock;
   if (symbol) {
     stockDetail(symbol);
+    return;
+  }
+  if (el.dataset.action === 'holdingmetric') {
+    if (el.dataset.metric === 'pnl' || el.dataset.metric === 'returns') {
+      holdingMetric = el.dataset.metric;
+      render();
+    }
     return;
   }
   safely(() => {

@@ -20,3 +20,9 @@ export function allocateLots(lots, quantity, fifo = false) {
   }
   return allocations;
 }
+
+/** Unrealised return on the cost of the remaining lots, not total account return. */
+export function holdingReturnPercent(cost, unrealized) {
+  if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(unrealized)) return null;
+  return (unrealized / cost) * 100;
+}
