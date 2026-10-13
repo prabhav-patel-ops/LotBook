@@ -354,6 +354,35 @@ p {
   background: #f8faf7;
   font-size: 11px !important;
 }
+.portfolio-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.metric-switch {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid #dce6df;
+  border-radius: 10px;
+  background: #f6f9f5;
+}
+.metric-switch button {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #506b5a;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.metric-switch button.active {
+  background: #136b58;
+  color: white;
+}
+.metric-switch button:not(.active):hover {
+  background: #e8f1e9;
+}
 .holdings-head {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr 0.9fr;
@@ -405,6 +434,18 @@ p {
   gap: 13px;
   align-items: center;
   min-width: 0;
+}
+.stock-main > div {
+  min-width: 0;
+}
+.holding-row .stock-price {
+  color: #2b614e;
+  font-weight: 650;
+  font-size: 11px;
+}
+.holding-row .stock-quote {
+  color: #6c8170;
+  line-height: 1.35;
 }
 .stock-main b {
   overflow-wrap: anywhere;
@@ -1261,6 +1302,23 @@ pre {
     transition: none !important;
     animation: none !important;
     scroll-behavior: auto !important;
+  }
+}
+@media (max-width: 580px) {
+  .portfolio-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .portfolio-controls,
+  .portfolio-controls .search,
+  .metric-switch {
+    width: 100%;
+  }
+  .metric-switch button {
+    flex: 1;
+  }
+  .holding-row > div:last-child {
+    min-width: 91px;
   }
 }
 #app-status:empty { display:none; }
