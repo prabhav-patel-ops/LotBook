@@ -66,8 +66,6 @@ test('rate-limit and symbol mismatch do not produce a usable quote', async () =>
   await assert.rejects(fetchIndianQuote('INFY', 'key', async () => ({ ok: true, json: async () => ({ tickerId: 'RELIANCE', currentPrice: { NSE: 100 } }) })), /identity/);
 });
 
-
-
 test('browser connection failure is explained without claiming a bad key', async () => {
   await assert.rejects(
     fetchIndianQuote('INFY', 'key', async () => { throw new TypeError('Load failed'); }),
