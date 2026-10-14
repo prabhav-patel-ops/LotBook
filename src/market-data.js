@@ -118,7 +118,10 @@ const chunks = (items, size = YAHOO_BATCH_SIZE) => {
 async function fetchYahooSpark(entries, suffix, fetcher, fetchedAt) {
   if (!entries.length) return {quotes:{}, missing:[]};
   const symbols = entries.map(entry => `${entry.ticker}${suffix}`);
-  const target = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${encodeURIComponent(symbols.join(','))}%26range=1d%26interval=1d`;
+  // Jina decodes the nested target URL once. Ampersands inside exchange tickers
+  // therefore need a second layer so Yahoo receives them as part of the symbol.
+  const encodedSymbols = symbols.map(symbol => encodeURIComponent(symbol).replace(/%26/g, '%2526')).join('%2C');
+  const target = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${encodedSymbols}%26range=1d%26interval=1d`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
@@ -150,6 +153,15 @@ async function fetchYahooSpark(entries, suffix, fetcher, fetchedAt) {
   } finally { clearTimeout(timeout); }
 }
 
+const retryPause = () => new Promise(resolve => setTimeout(resolve, 350));
+async function fetchYahooSparkWithRetry(entries, suffix, fetcher, fetchedAt) {
+  try { return await fetchYahooSpark(entries, suffix, fetcher, fetchedAt); }
+  catch {
+    await retryPause();
+    return fetchYahooSpark(entries, suffix, fetcher, fetchedAt);
+  }
+}
+
 export async function fetchYahooBatchQuotes(holdings, fetcher = fetch, fetchedAt = new Date().toISOString()) {
   const entries = holdings.map(holding => {
     const mapped = marketTicker(holding?.symbol);
@@ -162,20 +174,24 @@ export async function fetchYahooBatchQuotes(holdings, fetcher = fetch, fetchedAt
   ];
   for (const group of initialGroups) {
     const batches = chunks(group.entries);
-    const results = await Promise.allSettled(batches.map(batch => fetchYahooSpark(batch, group.suffix, fetcher, fetchedAt)));
-    results.forEach((result, index) => {
-      if (result.status === 'fulfilled') { Object.assign(quotes, result.value.quotes); unresolved.push(...result.value.missing); }
-      else unresolved.push(...batches[index]);
-    });
+    for (const batch of batches) {
+      try {
+        const result = await fetchYahooSparkWithRetry(batch, group.suffix, fetcher, fetchedAt);
+        Object.assign(quotes, result.quotes);
+        unresolved.push(...result.missing);
+      } catch { unresolved.push(...batch); }
+    }
   }
   const bseFallback = unresolved.filter(entry => entry.exchange !== 'BSE');
   const fallbackBatches = chunks(bseFallback);
-  const fallbackResults = await Promise.allSettled(fallbackBatches.map(batch => fetchYahooSpark(batch, '.BO', fetcher, fetchedAt)));
   const stillMissing = [];
-  fallbackResults.forEach((result, index) => {
-    if (result.status === 'fulfilled') { Object.assign(quotes, result.value.quotes); stillMissing.push(...result.value.missing); }
-    else stillMissing.push(...fallbackBatches[index]);
-  });
+  for (const batch of fallbackBatches) {
+    try {
+      const result = await fetchYahooSparkWithRetry(batch, '.BO', fetcher, fetchedAt);
+      Object.assign(quotes, result.quotes);
+      stillMissing.push(...result.missing);
+    } catch { stillMissing.push(...batch); }
+  }
   stillMissing.push(...unresolved.filter(entry => entry.exchange === 'BSE'));
   return {quotes, errors:stillMissing.map(entry => `${entry.symbol}: no verified NSE or BSE quote was returned`)};
 }

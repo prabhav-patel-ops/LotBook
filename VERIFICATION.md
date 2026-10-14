@@ -1,10 +1,11 @@
-# LotBook 1.5.0 batched-price verification — 14 October 2026
+# LotBook 1.5.1 rate-safe price verification — 15 October 2026
 
-- 164 automated tests passed. A synthetic 70-stock portfolio refreshes in three Yahoo/Jina batch requests rather than 70–140 sequential requests.
+- 166 automated tests passed. A synthetic 70-stock portfolio refreshes in three sequential Yahoo/Jina batch requests rather than 70–140 per-stock requests; observed request concurrency is exactly one.
 - Mixed NSE and BSE coverage passed: direct BSE symbols and verified NSE-to-BSE fallbacks resolve inside the batch pipeline without ticker-specific rules.
 - Each returned quote still requires an exact ticker, INR currency, recent market timestamp and usable positive price. BSE fallback additionally requires matching company identity.
-- Failed batches do not discard successful batches. An optional IndianAPI key is used only for symbols left unresolved after the faster free batch refresh.
-- Price refresh completion is separated from the slower weekly corporate-action check, so the price button becomes available as soon as valuation quotes finish.
+- A failed or rate-limited batch is retried once without discarding successful batches. An optional IndianAPI key is used only for symbols left unresolved after the faster free batch refresh.
+- Ampersands inside symbols such as `M&M` survive both relay decoding layers and reach Yahoo as part of the ticker.
+- Price refresh is fully separated from corporate-action checks, so the price button does not start dozens of share-event requests or produce their rate-limit warnings. Share events remain checked after statement imports.
 
 ## LotBook 1.4.1 BSE and mobile-layout verification — 14 October 2026
 
