@@ -1,4 +1,12 @@
-# LotBook 1.3.0 verification — 14 October 2026
+# LotBook 1.4.0 usability verification — 14 October 2026
+
+- 160 automated tests passed, including diary name/type/month filters, stable ordering, complete history pagination beyond 500 entries, and input immutability. The accounting engine is unchanged.
+- Production build passed. Isolated Edge checks at 320, 390, 768 and 1440 pixels covered all six screens without horizontal overflow.
+- Browser checks covered search, combined filters, empty results, Show more, transaction details, cost editing, cheapest-lot matching, saved notes after reload, unsaved notes across tabs, rights records and privacy masking.
+- The 424-row replacement and verified bonus-sale import regression checks also passed on the redesigned production build. Only synthetic records were used.
+- Screenshots were inspected for mobile and desktop layout. Physical phones and arbitrary third-party report variants were not available for testing.
+
+## LotBook 1.3.0 verification — 14 October 2026
 
 - 149 automated tests passed, covering cheapest-lot matching, rights-entitlement separation and backup retention, legacy explicit-allocation recovery, verified bonus/split handling, chronological multiple actions and snapshot-date cutoffs.
 - Production build passed; production dependency audit reported zero known vulnerabilities.

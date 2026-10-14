@@ -6,6 +6,17 @@ A local-only personal equity trading diary. Track purchase lots, core holdings, 
 
 **User flow and privacy:** [Guide](public/guide.html)
 
+## Everyday use · v1.4.0
+
+- **Diary → Activity:** newest-first date groups, search by stock name/symbol, type/month filters, and Show more. Tap any trade for costs, matched purchase lots, and record details. Sales show sold-lot P&L; purchases show gross purchase value with distinct labels.
+- **Diary → Notes:** keep decision notes separately from transactions. Unsaved text survives in-app tab changes; Save note is required to keep it after a reload.
+- **Diary → Rights trades:** separate entitlement records, when present. No acquisition cost or profit is invented.
+- **Holdings:** three summary figures, compact price controls, and visible sold-share results. Tap a stock for quote source/time and purchase lots; expand the profit explanation for the FIFO comparison.
+- **Statements:** order history first, holdings second; optional broker reports are grouped below. Replacement always requires review and confirmation.
+- **Settings:** backups and updates first; quote settings, profile, installation, privacy and clearing data are expandable sections.
+
+The layout refresh does not change the accounting engine or remove existing diary records.
+
 Enter a name → upload Groww equity order history CSV/XLSX → review and classify buys → holdings → record an actual broker sale in the diary → allocate purchase lots → view cycles and monthly results.
 
 This does not execute orders or change a broker's FIFO or tax records. Total economic results do not change when lots are matched differently. Full history is required; holdings snapshots only reconcile quantities. Arbitrary PDFs receive local text preview, not guessed trading records.
