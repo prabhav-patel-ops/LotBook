@@ -1,4 +1,12 @@
-# LotBook 1.4.1 BSE and mobile-layout verification — 14 October 2026
+# LotBook 1.5.0 batched-price verification — 14 October 2026
+
+- 164 automated tests passed. A synthetic 70-stock portfolio refreshes in three Yahoo/Jina batch requests rather than 70–140 sequential requests.
+- Mixed NSE and BSE coverage passed: direct BSE symbols and verified NSE-to-BSE fallbacks resolve inside the batch pipeline without ticker-specific rules.
+- Each returned quote still requires an exact ticker, INR currency, recent market timestamp and usable positive price. BSE fallback additionally requires matching company identity.
+- Failed batches do not discard successful batches. An optional IndianAPI key is used only for symbols left unresolved after the faster free batch refresh.
+- Price refresh completion is separated from the slower weekly corporate-action check, so the price button becomes available as soon as valuation quotes finish.
+
+## LotBook 1.4.1 BSE and mobile-layout verification — 14 October 2026
 
 - 162 automated tests passed. New cases cover normalized full-name and legal-acronym identity matching, exact BSE fallback, truncated provider company names and rejection of unrelated same-ticker results.
 - Production build passed. A dedicated 390 × 844 Edge regression reproduced the reported `NSE$` holding: the NSE quote failed, `NSE.BO` resolved with an exact BSE identity, and no irrelevant NSE corporate-action request or warning was produced.

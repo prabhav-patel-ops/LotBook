@@ -6,7 +6,7 @@ A local-only personal equity trading diary. Track purchase lots, core holdings, 
 
 **User flow and privacy:** [Guide](public/guide.html)
 
-## Everyday use · v1.4.1
+## Everyday use · v1.5.0
 
 - **Diary → Activity:** newest-first date groups, search by stock name/symbol, type/month filters, and Show more. Tap any trade for costs, matched purchase lots, and record details. Sales show sold-lot P&L; purchases show gross purchase value with distinct labels.
 - **Diary → Notes:** keep decision notes separately from transactions. Unsaved text survives in-app tab changes; Save note is required to keep it after a reload.
@@ -25,7 +25,7 @@ This does not execute orders or change a broker's FIFO or tax records. Total eco
 
 In **Holdings → Refresh prices**, Lotbook can request keyless Yahoo Finance quotes through Jina Reader as a temporary, unofficial personal-use fallback. An optional [IndianAPI stock key](https://indianapi.in/indian-stock-market) can still be stored in Settings; if that service fails, the fallback is tried. Only requested tickers are sent to quote providers, not names, quantities, transactions, statements or notes. The relay and quote provider can see the requested tickers. Never put a provider key in GitHub or chat. The key and quote cache stay on this device and are excluded from JSON diary backups.
 
-Quotes refresh when the app opens, and while visible during NSE hours at the chosen 15/30/60/120-minute interval (60 minutes by default). A Refresh prices button requests updates on demand. The app does not refresh when closed. Provider limits, unsupported tickers and outages leave the most recent usable quote or a manually entered price; quotes older than seven days are excluded from valuation. Each holding shows its source and age; Yahoo's reported market timestamp is checked, while IndianAPI's fetch time is not a verified trade time. The relay has no uptime guarantee. Verify material values against Groww before acting. Cash remains manual.
+Quotes refresh when the app opens, and while visible during NSE hours at the chosen 15/30/60/120-minute interval (60 minutes by default). A Refresh prices button requests updates on demand. Yahoo symbols are requested in validated batches of up to 25, so a 60–70 stock portfolio normally needs only three NSE requests plus any required BSE fallback batches instead of one or two requests per stock. The app does not refresh when closed. Provider limits, unsupported tickers and outages leave the most recent usable quote or a manually entered price; quotes older than seven days are excluded from valuation. Each holding shows its source and age; Yahoo's reported market timestamp is checked, while IndianAPI's fetch time is not a verified trade time. The relay has no uptime guarantee. Verify material values against Groww before acting. Cash remains manual.
 
 ## Development
 
