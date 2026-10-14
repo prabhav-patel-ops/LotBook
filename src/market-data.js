@@ -54,7 +54,26 @@ export function parseYahooQuote(payload, symbol, fetchedAt = new Date().toISOStr
   return {price,fetchedAt,marketAt,exchange:wanted.exchange,source:'Yahoo via Jina (unofficial)'};
 }
 
-const companyKey = name => String(name || '').toUpperCase().replace(/\b(?:LIMITED|LTD)\b/g, '').replace(/[^A-Z0-9]/g, '');
+const COMPANY_NOISE = new Set(['LIMITED','LTD','THE','OF','INDIA','IND','AND','COMPANY','CO']);
+const companyTokens = name => String(name || '').toUpperCase().replace(/&/g, ' AND ')
+  .replace(/[^A-Z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean)
+  .filter(token => !COMPANY_NOISE.has(token));
+const companyKey = name => companyTokens(name).join('');
+const companyAcronym = name => companyTokens(name).map(token => token[0]).join('');
+const companyLegalAcronym = name => String(name || '').toUpperCase().replace(/&/g, ' AND ')
+  .replace(/[^A-Z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean)
+  .filter(token => !new Set(['THE','OF','INDIA','IND','AND','COMPANY','CO']).has(token))
+  .map(token => token[0]).join('');
+export function companyIdentityMatches(expected, actual, ticker = '') {
+  const expectedKey = companyKey(expected), actualKey = companyKey(actual);
+  if (!expectedKey || !actualKey) return false;
+  if (actualKey.includes(expectedKey) || expectedKey.includes(actualKey)) return true;
+  const expectedAcronyms = new Set([companyAcronym(expected), companyLegalAcronym(expected)].filter(value => value.length >= 2));
+  const actualAcronyms = new Set([companyAcronym(actual), companyLegalAcronym(actual)].filter(value => value.length >= 2));
+  const wantedTicker = marketTicker(ticker)?.ticker || String(ticker || '').toUpperCase().replace(/\$$/, '');
+  return [...expectedAcronyms].some(value => actualAcronyms.has(value)) ||
+    (expectedKey === wantedTicker && actualAcronyms.has(wantedTicker));
+}
 export async function fetchYahooFallback(symbol, fetcher = fetch, companyName = '') {
   const mapped = marketTicker(symbol);
   if (!mapped) throw Error(`Unsupported market symbol ${symbol}.`);
@@ -75,9 +94,9 @@ export async function fetchYahooFallback(symbol, fetcher = fetch, companyName = 
       if (marker < 0 || start < 0 || text.length > 100000) throw Error('Free quote relay returned an unexpected format.');
       const payload = JSON.parse(text.slice(start).trim());
       if (suffix === '.BO' && mapped.exchange !== 'BSE') {
-        const actualName = companyKey(payload?.chart?.result?.[0]?.meta?.longName);
-        const expectedName = companyKey(companyName);
-        if (!expectedName || !actualName || !(actualName.includes(expectedName) || expectedName.includes(actualName)))
+        const meta = payload?.chart?.result?.[0]?.meta;
+        const actualName = meta?.longName || meta?.shortName;
+        if (!companyIdentityMatches(companyName, actualName, mapped.ticker))
           throw Error(`${symbol}: BSE fallback identity could not be confirmed against the stock name.`);
       }
       return parseYahooQuote(payload, `${mapped.ticker}${suffix}`);

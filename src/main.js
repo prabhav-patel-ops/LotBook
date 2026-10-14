@@ -135,6 +135,10 @@ async function refreshCorporateActions(force = false) {
   for (let index = 0; index < due.length; index += 3) {
     await Promise.all(due.slice(index, index + 3).map(async ([symbol, firstDate]) => {
       try {
+        if (usableMarketQuote(marketQuotes[symbol]) && marketQuotes[symbol].exchange === 'BSE') {
+          checked[symbol] = Date.now();
+          return;
+        }
         events.push(...await fetchVerifiedShareEvents(symbol, firstDate));
         checked[symbol] = Date.now();
       } catch (error) { issues.push(`${symbol}: ${error.message}`); }
@@ -146,7 +150,9 @@ async function refreshCorporateActions(force = false) {
     const result = applyVerifiedCorporateActions(state.transactions, events, state.snapshots, state.snapshotDate);
     issues.push(...result.issues);
     if (result.applied.length) commit({...state, transactions:result.transactions});
-    actionMessage = `${result.applied.length} verified share adjustment${result.applied.length===1?'':'s'} applied${issues.length?` · ${issues.length} need review: ${issues[0]}`:''}.`;
+    actionMessage = result.applied.length || issues.length
+      ? `${result.applied.length} verified share adjustment${result.applied.length===1?'':'s'} applied${issues.length?` · ${issues.length} need review: ${issues[0]}`:''}.`
+      : '';
   } catch (error) {
     actionMessage = `Share changes were not saved: ${error.message}`;
   } finally {

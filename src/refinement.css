@@ -23,7 +23,7 @@ small, .fine { color:#65766d; line-height:1.6; }
 .summary-stats { grid-template-columns:repeat(3,minmax(0,1fr)); margin:20px 0; }
 .stat-card { padding:22px; gap:8px; border-radius:16px; }
 .stat-card span { font-size:12px; color:#526a5b; }
-.stat-card strong { font-size:27px; font-variant-numeric:tabular-nums; letter-spacing:-.7px; }
+.stat-card strong { font-size:27px; font-variant-numeric:tabular-nums; letter-spacing:-.7px; white-space:nowrap; }
 .stat-card small { font-size:11px; color:#62786a; }
 .stat-card.featured { background:#eaf3ee; border-color:#d6e6db; }
 .market-panel { padding:0; }
@@ -98,6 +98,12 @@ small, .fine { color:#65766d; line-height:1.6; }
 .detail-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; align-items:center; }
 .detail-actions>.button,.detail-actions>button { margin:0; min-height:46px; }
 .import-intro { display:flex; align-items:center; gap:7px; color:#536e5d; font-size:13px; }
+.info-hero { padding:28px; align-items:center; }
+.info-hero>div { min-width:0; }
+.info-hero h2 { margin:8px 0; }
+.info-hero p { font-size:14px; line-height:1.65; }
+.info-hero>button { flex-shrink:0; }
+.panel:has(> .report-grid)>h2 { margin:0; padding:24px; font-size:18px; }
 .upload-target { min-height:120px; padding:20px; margin-bottom:12px; }
 .upload-target:focus-within { outline:3px solid #65a692; outline-offset:3px; }
 .nav svg,.mobile-nav svg { display:block; }
@@ -125,8 +131,12 @@ footer { color:#718376; font-size:11px; padding-top:12px; }
   .panel-title { padding:18px; }
   .panel-title span { font-size:11px; }
   .panel-title h2 { font-size:16px; }
-  .summary-stats { gap:10px; }
-  .stat-card { padding:16px; }
+  .summary-stats { grid-template-columns:1fr; gap:10px; }
+  .summary-stats .featured { grid-column:auto; }
+  .summary-stats .stat-card { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px 16px; padding:18px; }
+  .summary-stats .stat-card span { grid-column:1; grid-row:1; }
+  .summary-stats .stat-card small { grid-column:1; grid-row:2; }
+  .summary-stats .stat-card strong { grid-column:2; grid-row:1 / span 2; font-size:clamp(19px,5.5vw,23px); text-align:right; }
   .stat-card span { font-size:11px; }
   .stat-card strong { font-size:23px; }
   .stat-card small { font-size:10px; }
@@ -169,4 +179,7 @@ footer { color:#718376; font-size:11px; padding-top:12px; }
   .dialog .kv>b { max-width:60%; }
   .dialog input,.dialog select,.dialog textarea, .note-editor textarea { font-size:16px; }
   .detail-actions>* { flex:1; }
+  .info-hero { padding:22px; gap:20px; }
+  .info-hero>button { width:100%; }
+  .panel:has(> .report-grid)>h2 { padding:21px 24px; font-size:17px; }
 }

@@ -6,7 +6,7 @@ A local-only personal equity trading diary. Track purchase lots, core holdings, 
 
 **User flow and privacy:** [Guide](public/guide.html)
 
-## Everyday use · v1.4.0
+## Everyday use · v1.4.1
 
 - **Diary → Activity:** newest-first date groups, search by stock name/symbol, type/month filters, and Show more. Tap any trade for costs, matched purchase lots, and record details. Sales show sold-lot P&L; purchases show gross purchase value with distinct labels.
 - **Diary → Notes:** keep decision notes separately from transactions. Unsaved text survives in-app tab changes; Save note is required to keep it after a reload.
@@ -41,4 +41,4 @@ Corporate actions are detected from Yahoo's public history and confirmed against
 
 A complete Groww order-history import replaces the existing diary trades and clears prior snapshots, reference reports, manual prices, cash and import logs after confirmation. Rights-entitlement trades ending in `-RE` are retained separately in Diary and JSON backups, excluded from ordinary share-lot P&L; no missing purchase is invented. Holdings snapshots replace earlier snapshots, and P&L/Capital Gains reports replace matching report periods. Tax liability is not calculated. Future statement variations may require mapping. Export a backup before replacement.
 
-Broker ticker display markers are normalized for quotes. If an NSE quote is unavailable, a BSE listing is accepted only when its ticker and company name agree; NSDL uses its Yahoo BSE listing through this generic path.
+Broker ticker display markers are normalized for quotes. If an NSE quote is unavailable, the app automatically tries the matching BSE ticker and accepts it only when the returned company identity agrees with the holding name. Full names and meaningful legal-name acronyms are supported, including truncated provider names; this generic path covers BSE-only holdings such as NSE and NSDL without a ticker-specific price table. Routine NSE corporate-action checks are skipped for confirmed BSE-only quotes, so they do not create irrelevant warnings.
