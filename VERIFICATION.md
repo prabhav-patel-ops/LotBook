@@ -1,4 +1,12 @@
-# LotBook 1.4.0 usability verification — 14 October 2026
+# LotBook 1.4.1 BSE and mobile-layout verification — 14 October 2026
+
+- 162 automated tests passed. New cases cover normalized full-name and legal-acronym identity matching, exact BSE fallback, truncated provider company names and rejection of unrelated same-ticker results.
+- Production build passed. A dedicated 390 × 844 Edge regression reproduced the reported `NSE$` holding: the NSE quote failed, `NSE.BO` resolved with an exact BSE identity, and no irrelevant NSE corporate-action request or warning was produced.
+- Large Indian-formatted holding totals remained on one line without clipping. The Holdings summary becomes compact single-column cards on narrow phones.
+- The Info guide hero and report heading use consistent mobile insets. The dedicated regression also confirmed no horizontal page overflow.
+- The quote logic remains generic: no NSE, NSDL, split or bonus price is hardcoded. Only a quote whose returned company identity agrees with the local holding is accepted.
+
+## LotBook 1.4.0 usability verification — 14 October 2026
 
 - 160 automated tests passed, including diary name/type/month filters, stable ordering, complete history pagination beyond 500 entries, and input immutability. The accounting engine is unchanged.
 - Production build passed. Isolated Edge checks at 320, 390, 768 and 1440 pixels covered all six screens without horizontal overflow.

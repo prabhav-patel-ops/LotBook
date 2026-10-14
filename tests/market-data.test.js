@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, parseIndianQuote,
   fetchIndianQuote, marketIntervalMs, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY,
-  fetchYahooFallback,
+  fetchYahooFallback, companyIdentityMatches,
 } from '../src/market-data.js';
 
 test('maps Groww-style symbols without guessing company names', () => {
@@ -26,6 +26,29 @@ test('BSE-only stock gets a quote only when Yahoo company identity matches the h
  assert.equal(quote.exchange,'BSE');
  assert.equal(requested.length,2);
  await assert.rejects(fetchYahooFallback('NSDL$',fetcher,'Unrelated Company'),/identity/);
+});
+
+test('generic BSE identity recognises full names and meaningful acronyms without ticker-specific rules', () => {
+ assert.equal(companyIdentityMatches('NSE','National Stock Exchange of India Limited','NSE'),true);
+ assert.equal(companyIdentityMatches('NSE','National Stock Exchange of Ind','NSE'),true);
+ assert.equal(companyIdentityMatches('NSDL','National Securities Depository Limited','NSDL'),true);
+ assert.equal(companyIdentityMatches('National Securities Depository','National Securities Depository Limited','NSDL'),true);
+ assert.equal(companyIdentityMatches('NSE','Unrelated Network Services Enterprise Limited','NSE'),false);
+ assert.equal(companyIdentityMatches('', 'National Stock Exchange of India Limited','NSE'),false);
+});
+
+test('BSE-only exchange acronym gets its exact Yahoo BSE quote generically', async () => {
+ const requested=[];
+ const fetcher=async url=>{
+  requested.push(url);
+  const bse=url.includes('NSE.BO');
+  const body=bse?{chart:{result:[{meta:{symbol:'NSE.BO',currency:'INR',shortName:'National Stock Exchange of Ind',regularMarketPrice:1749.85,regularMarketTime:Math.floor(Date.now()/1000)}}],error:null}}:{chart:{result:null,error:{code:'Not Found'}}};
+  return {ok:true,text:async()=>`Markdown Content:\n${JSON.stringify(body)}`};
+ };
+ const quote=await fetchYahooFallback('NSE$',fetcher,'NSE');
+ assert.equal(quote.price,1749.85);
+ assert.equal(quote.exchange,'BSE');
+ assert.equal(requested.length,2);
 });
 
 test('refresh interval defaults to an hour and accepts only approved free-credit settings', () => {
