@@ -37,9 +37,11 @@ const snapshotNumber=value=>{
 export function fresh() {
   return {
     version: 1,
+    lotPolicy: 'lowest-v2',
     profile: "",
     onboarded: false,
     transactions: [],
+    rightsTrades: [],
     prices: {},
     snapshots: [],
     snapshotComplete: false,
@@ -74,7 +76,27 @@ export function validateBackup(raw) {
     }
     return v;
   });
-  const result = analyse(state.transactions);
+  if (raw.rightsTrades !== undefined && (!Array.isArray(raw.rightsTrades) || raw.rightsTrades.length > 20000))
+    throw Error('Invalid rights-entitlement records in backup.');
+  state.rightsTrades = (raw.rightsTrades || []).map(t => {
+    const v = validateTransaction(t);
+    if (!/-RE$/.test(v.symbol) || v.corporateAction || ids.has(v.id))
+      throw Error('Invalid rights-entitlement record in backup.');
+    ids.add(v.id);
+    return v;
+  });
+  let result = analyse(state.transactions);
+  // Older diaries used FIFO for automatic sales. If changing that matching would
+  // exhaust a later explicitly selected lot, preserve the working legacy history.
+  if (result.errors.length && !raw.lotPolicy) {
+    const legacy = analyse(state.transactions, {}, 'fifo');
+    if (!legacy.errors.length) {
+      state.transactions = state.transactions.map(t => t.side === 'SELL' && !t.allocations ? {
+        ...t, allocations: legacy.cycles.filter(c => c.sellId === t.id).map(c => ({lotId:c.lotId,quantity:c.quantity})),
+      } : t);
+      result = analyse(state.transactions);
+    }
+  }
   if (result.errors.length)
     throw Error(
       "Backup has invalid trading history: " + result.errors[0].message,

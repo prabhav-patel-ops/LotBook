@@ -4,8 +4,8 @@ import { parseStatement, parseRows } from "./importer.js";
 import { parseReferenceStatement, summarizeReferenceEntries } from "./reference-reports.js";
 import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js";
 import { csvCell, allocateLots, holdingReturnPercent } from "./ui-logic.js";
-import { prepareTradeReplacement, applyKnownCorporateActions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
-import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote, fetchYahooFallback } from "./market-data.js";
+import { prepareTradeReplacement, applyVerifiedCorporateActions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
+import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote, fetchYahooFallback, fetchVerifiedShareEvents } from "./market-data.js";
 const $ = (s) => document.querySelector(s),
   esc = (s) =>
     String(s ?? "").replace(
@@ -52,6 +52,9 @@ let marketQuotes = readMarketCache(localStorage),
   marketMessage = "",
   marketLastAttempt = 0,
   marketAttempts = {};
+const ACTION_CHECK_KEY = 'lotbook.share-check.v1';
+let actionRefreshing = false,
+  actionMessage = '';
 try {
   baselineRaw = localStorage.getItem(KEY);
   state = load();
@@ -99,6 +102,46 @@ const marketIsOpen = () => {
   const minutes = Number(parts.hour) * 60 + Number(parts.minute);
   return minutes >= 9 * 60 + 15 && minutes <= 15 * 60 + 30;
 };
+async function refreshCorporateActions(force = false) {
+  if (demo || loadError || !state.onboarded || actionRefreshing || !navigator.onLine) return;
+  const buys = state.transactions.filter(t => t.side === 'BUY' && !t.corporateAction);
+  const earliest = new Map();
+  for (const trade of buys) {
+    const current = earliest.get(trade.symbol);
+    if (!current || trade.date < current) earliest.set(trade.symbol, trade.date);
+  }
+  let checked;
+  try { checked = JSON.parse(localStorage.getItem(ACTION_CHECK_KEY) || '{}'); }
+  catch { checked = {}; }
+  if (!checked || typeof checked !== 'object' || Array.isArray(checked)) checked = {};
+  const due = [...earliest].filter(([symbol]) => force || Date.now() - Number(checked[symbol] || 0) > 24 * 60 * 60 * 1000);
+  if (!due.length) return;
+  actionRefreshing = true;
+  actionMessage = 'Checking exchange-confirmed share changes…';
+  if (!$('#modal-root .dialog')) render();
+  const events = [], issues = [];
+  for (let index = 0; index < due.length; index += 3) {
+    await Promise.all(due.slice(index, index + 3).map(async ([symbol, firstDate]) => {
+      try {
+        events.push(...await fetchVerifiedShareEvents(symbol, firstDate));
+        checked[symbol] = Date.now();
+      } catch (error) { issues.push(`${symbol}: ${error.message}`); }
+    }));
+  }
+  try { localStorage.setItem(ACTION_CHECK_KEY, JSON.stringify(checked)); }
+  catch { issues.push('Could not save share-check time on this device.'); }
+  try {
+    const result = applyVerifiedCorporateActions(state.transactions, events, state.snapshots, state.snapshotDate);
+    issues.push(...result.issues);
+    if (result.applied.length) commit({...state, transactions:result.transactions});
+    actionMessage = `${result.applied.length} verified share adjustment${result.applied.length===1?'':'s'} applied${issues.length?` · ${issues.length} need review: ${issues[0]}`:''}.`;
+  } catch (error) {
+    actionMessage = `Share changes were not saved: ${error.message}`;
+  } finally {
+    actionRefreshing = false;
+    if (!$('#modal-root .dialog')) render();
+  }
+}
 async function refreshMarket(force = false) {
   const key = localStorage.getItem(MARKET_KEY);
   if (demo || loadError || !state.profile || !state.onboarded || marketRefreshing) return;
@@ -116,7 +159,7 @@ async function refreshMarket(force = false) {
   const due = symbols.filter(symbol => force ||
     ((!usableMarketQuote(marketQuotes[symbol]) || now - Date.parse(marketQuotes[symbol].fetchedAt) >= interval) &&
       now - (marketAttempts[symbol] || 0) >= interval));
-  if (!due.length) return;
+  if (!due.length) { await refreshCorporateActions(force); return; }
   marketRefreshing = true;
   marketLastAttempt = now;
   marketMessage = '';
@@ -131,8 +174,8 @@ async function refreshMarket(force = false) {
     try {
       if (key && !keyFailed) {
         try { marketQuotes[symbol] = await fetchIndianQuote(symbol, key); }
-        catch(error) { keyFailed = true; marketQuotes[symbol] = await fetchYahooFallback(symbol); }
-      } else marketQuotes[symbol] = await fetchYahooFallback(symbol);
+        catch(error) { keyFailed = true; marketQuotes[symbol] = await fetchYahooFallback(symbol, fetch, live().holdings.find(h=>h.symbol===symbol)?.name); }
+      } else marketQuotes[symbol] = await fetchYahooFallback(symbol, fetch, live().holdings.find(h=>h.symbol===symbol)?.name);
       updated++;
     } catch (error) { errors.push(`${symbol}: ${error.message}`); }
   }
@@ -142,6 +185,7 @@ async function refreshMarket(force = false) {
   marketRefreshing = false;
   marketMessage = errors.length ? `${updated} updated · ${errors.length} issue(s): ${errors[0]}` : `${updated} price${updated === 1 ? '' : 's'} updated`;
   if (!$('#modal-root .dialog')) render();
+  await refreshCorporateActions(force);
 }
 function scheduleMarketRefresh() {
   if (!state.onboarded || demo) return;
@@ -211,7 +255,7 @@ function render() {
       .join(
         "",
       )}</nav><div class="sidebar-foot"><span class="privacy-dot"></span> Private on this device<p>Your data stays with you.</p><a href="./guide.html" target="_blank" rel="noopener">How Lotbook works ↗</a></div></aside>
-  <div class="workspace"><header><div class="mobile-brand"><span class="logo">L</span> Lotbook</div><div class="breadcrumb">PERSONAL DIARY <span>/</span> ${esc(titles[view])}</div><div class="profile"><button class="privacy-toggle" data-action="privacy" aria-pressed="${state.privacyMode?'true':'false'}" title="${state.privacyMode?'Show amounts':'Hide amounts'}">${state.privacyMode?'◉':'◌'} <span>${state.privacyMode?'Amounts hidden':'Hide amounts'}</span></button><span class="avatar">${esc(state.profile[0].toUpperCase())}</span><span>${esc(state.profile)}</span></div></header><main class="content"><div class="page-title"><div><div class="eyebrow">${view === "holdings" ? "A CLEARER PICTURE, ONE LOT AT A TIME" : "YOUR JOURNEY, IN PERSPECTIVE"}</div><h1>${titles[view]}</h1><p>${{ holdings: "A little clarity for every share you own.", cycles: "Follow the journey from a purchase to a sale.", diary: "The trades, decisions, and lessons behind your portfolio.", import: "Read your statements locally. Review before adding.", info: "What each report means, how the numbers are used, and the tax reference.", settings: "Back up your diary, install the app, and manage your data." }[view]}</p></div>${view === "holdings" ? '<button data-action="buy">＋ Add a purchase</button>' : ""}</div>
+  <div class="workspace"><header><div class="mobile-brand"><span class="logo">L</span> Lotbook</div><div class="breadcrumb">PERSONAL DIARY <span>/</span> ${esc(titles[view])}</div><div class="profile"><button class="privacy-toggle" data-action="privacy" aria-pressed="${state.privacyMode?'true':'false'}" title="${state.privacyMode?'Show amounts':'Hide amounts'}">${state.privacyMode?'◉':'◌'} <span>${state.privacyMode?'Amounts hidden':'Hide amounts'}</span></button><span class="avatar">${esc(state.profile[0].toUpperCase())}</span><span>${esc(state.profile)}</span></div></header><main class="content"><div class="page-title"><div><div class="eyebrow">${view === "holdings" ? "A CLEARER PICTURE, ONE LOT AT A TIME" : "YOUR JOURNEY, IN PERSPECTIVE"}</div><h1>${titles[view]}</h1><p>${{ holdings: "A little clarity for every share you own.", cycles: "Follow the journey from a purchase to a sale.", diary: "The trades, decisions, and lessons behind your portfolio.", import: "Read your statements locally. Review before adding.", info: "How your lots, profit figures, reports and privacy settings work.", settings: "Back up your diary, install the app, and manage your data." }[view]}</p></div>${view === "holdings" ? '<button data-action="buy">＋ Add a purchase</button>' : ""}</div>
   ${demo ? '<div class="notice">You are exploring synthetic demo data. It is not saved. <button class="text-button" data-action="enddemo">Exit demo</button></div>' : ""}
   ${a.errors.length ? `<div class="notice error">${a.errors.length} transactions could not be applied. ${esc(a.errors[0].message)} Check your history before relying on totals.</div>` : ""}
   ${view === "holdings" ? holdings(a) : view === "cycles" ? cycles(a) : view === "diary" ? diary(a) : view === "import" ? uploadContent() : view === "info" ? infoContent(a) : settings()}
@@ -237,13 +281,17 @@ function marketPanel(a) {
   const linked = a.holdings.filter(h => h.quantity > 0 && usableMarketQuote(marketQuotes[h.symbol])).length;
   const count = a.holdings.filter(h => h.quantity > 0).length;
   const older = a.holdings.filter(h => h.quantity > 0 && usableMarketQuote(marketQuotes[h.symbol]) && Date.now() - Date.parse(marketQuotes[h.symbol].marketAt || marketQuotes[h.symbol].fetchedAt) > 24 * 60 * 60 * 1000).length;
-  return `<section class="panel mini market-panel"><div class="panel-title"><div><h2>Market-linked prices</h2><span>${linked} of ${count} holdings quoted · manual prices fill gaps</span></div><button class="secondary" data-action="refreshquotes" ${marketRefreshing ? 'disabled' : ''}>${marketRefreshing ? 'Updating…' : 'Refresh prices'}</button></div><p>Free keyless Yahoo fallback is active for personal use. If you have an IndianAPI key, it is tried first. Automatic checks run every ${marketIntervalMs(localStorage) / 60000} minutes while the app is open during NSE hours.</p>${older ? `<p class="notice" role="status">${older} quote${older === 1 ? ' is' : 's are'} over 24 hours old. Treat displayed values as historical, not live.</p>` : ''}${marketMessage ? `<p class="${/issue/.test(marketMessage) ? 'notice error' : 'fine'}" role="status">${esc(marketMessage)}</p>` : ''}<p class="fine">Yahoo quotes are unofficial, may be delayed or unavailable, and pass through Jina Reader. Only stock tickers go to the quote services; never your share counts, statements or diary. Verify important values with Groww.</p></section>`;
+  return `<section class="panel mini market-panel"><div class="panel-title"><div><h2>Market-linked prices</h2><span>${linked} of ${count} holdings quoted · manual prices fill gaps</span></div><button class="secondary" data-action="refreshquotes" ${marketRefreshing || actionRefreshing ? 'disabled' : ''}>${marketRefreshing || actionRefreshing ? 'Updating…' : 'Refresh prices'}</button></div><p class="fine">Updates every ${marketIntervalMs(localStorage) / 60000} minutes while open during market hours. Refresh any time.</p>${older ? `<p class="notice" role="status">${older} quote${older === 1 ? ' is' : 's are'} over 24 hours old. Treat displayed values as historical, not live.</p>` : ''}${marketMessage ? `<p class="${/issue/.test(marketMessage) ? 'notice error' : 'fine'}" role="status">${esc(marketMessage)}</p>` : ''}${actionMessage ? `<p class="${/review|not saved/.test(actionMessage) ? 'notice error' : 'fine'}" role="status">${esc(actionMessage)}</p>` : ''}<details><summary>Price source &amp; share adjustments</summary><p class="fine">Quotes come from Yahoo via Jina and may be delayed or unavailable. Bonus and split checks currently require matching Yahoo and NSE records. Any supplied holdings snapshot is compared at its own date. Only public stock history is requested; your statement and share counts stay on this device.</p></details></section>`;
 }
 function stats(a) {
   const enteredValue = a.totals.unpriced && a.holdings.every(h => h.currentPrice === null) ? null : a.totals.currentValue;
-  return `<div class="stats"><div class="stat-card featured"><span>Holdings cost</span><strong>${money(a.totals.invested)}</strong><small>Cost of remaining purchase lots</small></div><div class="stat-card"><span>Value at available prices</span><strong>${money(enteredValue)}</strong><small>${a.totals.unpriced ? "Incomplete · missing prices: " + a.totals.unpriced : "Market or manual prices · see source and age below"}</small></div><div class="stat-card"><span>Result after recorded costs</span><strong class="${tone(a.totals.realizedNet)}">${money(a.totals.realizedNet)}</strong><small>Selected lots · ${a.cycles.length} closures · before income tax</small></div><div class="stat-card"><span>Diary FIFO comparison</span><strong class="${tone(a.totals.fifoNet)}">${money(a.totals.fifoNet)}</strong><small>Diary comparison · not verified broker / tax FIFO</small></div></div>${a.totals.unknownCharges?`<div class="notice">Charges are unknown for ${a.totals.unknownCharges} transactions. Results after recorded costs are provisional; enter actual costs in Diary. Legacy zero charges remain unknown until verified.</div>`:'<p class="fine">Results include only recorded transaction costs, before personal income tax. Verify cost coverage independently.</p>'}`;
+  return `<div class="stats"><div class="stat-card featured"><span>Holdings cost</span><strong>${money(a.totals.invested)}</strong><small>Cost of remaining purchase lots</small></div><div class="stat-card"><span>Value at available prices</span><strong>${money(enteredValue)}</strong><small>${a.totals.unpriced ? "Incomplete · missing prices: " + a.totals.unpriced : "Market or manual prices · see source and age below"}</small></div><div class="stat-card"><span>Result after recorded costs</span><strong class="${tone(a.totals.realizedNet)}">${money(a.totals.realizedNet)}</strong><small>Selected lots · ${a.cycles.length} closures · before income tax</small></div><div class="stat-card"><span>Diary FIFO comparison</span><strong class="${tone(a.totals.fifoNet)}">${money(a.totals.fifoNet)}</strong><small>Diary comparison · not verified broker / tax FIFO</small></div></div>${a.totals.unknownCharges?`<p class="fine">Fees are unavailable for ${a.totals.unknownCharges} trades. Displayed profit includes recorded costs only; add missing costs in Diary.</p>`:'<p class="fine">Results include only recorded transaction costs, before personal income tax. Verify cost coverage independently.</p>'}`;
 }
 function holdings(a) {
+  const soldResults = new Map();
+  for (const cycle of a.cycles) soldResults.set(cycle.symbol, (soldResults.get(cycle.symbol) || 0) + cycle.net);
+  const heldSymbols=new Set(a.holdings.map(h=>h.symbol));
+  const closedSymbols=[...soldResults].filter(([symbol])=>!heldSymbols.has(symbol) && (!query||symbol.toLowerCase().includes(query.toLowerCase())));
   const list = a.holdings.filter(
     (h) =>
       h.quantity > 0 &&
@@ -252,9 +300,9 @@ function holdings(a) {
         h.name?.toLowerCase().includes(query.toLowerCase())),
   );
   const rows = list.length
-    ? `<div class="holdings-head"><span>Stock / price</span><span>Average / cost</span><span>Value / quote</span><span>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Unrealised return'}</span></div>${list.map((h) => `<button class="holding-row" data-stock="${esc(h.symbol)}"><div class="stock-main"><span class="stock-icon">${esc(h.symbol.slice(0, 2))}</span><div><b>${esc(h.name || h.symbol)}</b><small>${esc(h.symbol)} · ${num(h.quantity)} shares</small><small class="stock-price">Price ${money(h.currentPrice)} / share</small><small class="stock-quote">${esc(quoteDetail(h.symbol))}</small><span class="tag">${num(h.coreQuantity)} core · ${num(h.tradingQuantity)} trading</span></div></div><div><b>${money(h.averageCost)}</b><small>${money(h.cost)}</small></div><div><b>${money(h.currentValue)}</b><small>Value at available price</small></div><div><b class="${h.unrealized === null ? "" : tone(h.unrealized)}">${holdingMetricText(h)}</b><small>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Return on remaining cost'}</small><small>View lots →</small></div></button>`).join("")}`
+    ? `<div class="holdings-head"><span>Stock / price</span><span>Average / cost</span><span>Value / quote</span><span>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Unrealised return'}</span></div>${list.map((h) => `<button class="holding-row" data-stock="${esc(h.symbol)}"><div class="stock-main"><span class="stock-icon">${esc(h.symbol.slice(0, 2))}</span><div><b>${esc(h.name || h.symbol)}</b><small>${esc(h.symbol)} · ${num(h.quantity)} shares</small><small class="stock-price">Price ${money(h.currentPrice)} / share</small><small class="stock-quote">${esc(quoteDetail(h.symbol))}</small>${soldResults.has(h.symbol)?`<small class="stock-sold">Sold shares P&amp;L ${money(soldResults.get(h.symbol))}</small>`:''}</div></div><div><b>${money(h.averageCost)}</b><small>${money(h.cost)}</small></div><div><b>${money(h.currentValue)}</b><small>Value at available price</small></div><div><b class="${h.unrealized === null ? "" : tone(h.unrealized)}">${holdingMetricText(h)}</b><small>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Return on remaining cost'}</small><small>View lots →</small></div></button>`).join("")}`
     : `<div class="empty"><span class="empty-icon">◫</span><h3>${query ? "No matching stocks" : "Your portfolio starts here"}</h3><p>Import your Groww order history, or add your first purchase.<br>Every purchase becomes a lot you can follow.</p><button data-action="buy">Add a purchase</button><button class="secondary" data-view="import">Import statements</button></div>`;
-  return `${stats(a)}${marketPanel(a)}<div class="info-bar"><span>ⓘ</span><p>Lot selection changes how your diary attributes a sale. Your broker records and actual economic gain stay the same. FIFO here is a comparison, not a tax report.</p></div><section class="panel"><div class="panel-title portfolio-title"><div><h2>Portfolio</h2><span>${a.holdings.filter((h) => h.quantity > 0).length} holdings <span class="dot">·</span> Tap a stock to see every purchase</span></div><div class="portfolio-controls"><input class="search" id="search" value="${esc(query)}" placeholder="Search your holdings" aria-label="Search holdings"><div class="metric-switch" role="group" aria-label="Holding result display"><button data-action="holdingmetric" data-metric="pnl" aria-pressed="${holdingMetric === 'pnl'}" class="${holdingMetric === 'pnl' ? 'active' : ''}">P&L</button><button data-action="holdingmetric" data-metric="returns" aria-pressed="${holdingMetric === 'returns'}" class="${holdingMetric === 'returns' ? 'active' : ''}">Returns %</button></div></div></div>${rows}</section>${reconciliation(a)}<div class="two-col"><section class="panel mini"><div class="panel-title"><h2>Cash balance</h2><button class="text-button" data-action="cash">Update</button></div><strong class="large">${money(state.cash)}</strong><p>Enter the balance shown in Groww manually. It is not reconstructed from equity trades.</p></section><section class="panel mini"><div class="panel-title"><h2>Your diary, your device</h2><span>↗</span></div><p>Export a backup regularly. Browser storage can be cleared or lost when you change devices.</p><button class="secondary" data-action="export">Export my diary</button></section></div>`;
+  return `${stats(a)}${marketPanel(a)}<div class="info-bar"><span>ⓘ</span><p>Sold-share results use the lowest purchase-price lots by default. Matching changes diary attribution, not your actual broker proceeds. FIFO is a comparison, not a tax report.</p></div><section class="panel"><div class="panel-title portfolio-title"><div><h2>Portfolio</h2><span>${a.holdings.filter((h) => h.quantity > 0).length} holdings · Tap a stock to see lots</span></div><div class="portfolio-controls"><input class="search" id="search" value="${esc(query)}" placeholder="Search your stocks" aria-label="Search stocks"><div class="metric-switch" role="group" aria-label="Holding result display"><button data-action="holdingmetric" data-metric="pnl" aria-pressed="${holdingMetric === 'pnl'}" class="${holdingMetric === 'pnl' ? 'active' : ''}">P&L</button><button data-action="holdingmetric" data-metric="returns" aria-pressed="${holdingMetric === 'returns'}" class="${holdingMetric === 'returns' ? 'active' : ''}">Returns %</button></div></div></div>${rows}</section>${closedSymbols.length?`<section class="panel mini"><h2>Fully sold stocks</h2><p>Diary result after recorded costs. Automatic sales use the lowest-price lots; custom matches are retained.</p>${closedSymbols.map(([symbol,net])=>`<div class="kv"><span><b>${esc(symbol)}</b><small>No shares remaining</small></span><b class="${tone(net)}">${money(net)}</b></div>`).join('')}</section>`:''}${reconciliation(a)}<div class="two-col"><section class="panel mini"><div class="panel-title"><h2>Cash balance</h2><button class="text-button" data-action="cash">Update</button></div><strong class="large">${money(state.cash)}</strong><p>Enter the balance shown in Groww manually. It is not reconstructed from equity trades.</p></section><section class="panel mini"><div class="panel-title"><h2>Your diary, your device</h2><span>↗</span></div><p>Export a backup regularly. Browser storage can be cleared or lost when you change devices.</p><button class="secondary" data-action="export">Export my diary</button></section></div>`;
 }
 function reconciliation(a) {
   if (!state.snapshots.length && !state.snapshotComplete) return "";
@@ -282,7 +330,7 @@ function cycles(a) {
 }
 function diary(a) {
   const tx = orderedTransactions(state.transactions).reverse();
-  return `<section class="panel mini"><h2>Today’s decision note</h2><form id="note-form"><label>What did you learn or plan?<textarea name="note" maxlength="3000" placeholder="Why did I enter? What would make me exit?">${esc(state.notes[today()] || "")}</textarea></label><button>Save note</button></form></section><section class="panel"><div class="panel-title"><h2>Transaction history</h2><span>${tx.length} entries</span></div>${tx.map((t, i) => `<div class="history-row"><span class="side ${t.side.toLowerCase()}">${esc(t.side)}</span><div><b>${esc(t.symbol)}</b><small>${esc(t.date)} ${esc(t.tradeTime||"")} · ${num(t.quantity)} × ${money(t.price)} · Charges ${t.chargesKnown?money(t.charges):"unknown"}</small>${t.note ? `<small>${esc(t.note)}</small>` : ""}</div><span class="tag">${t.side === "BUY" ? esc(t.purpose) : "Diary sale"}</span><div class="row-actions"><button class="text-button" data-action="history" data-id="${esc(t.id)}">History</button><button class="text-button" data-action="charges" data-id="${esc(t.id)}">Costs</button>${t.side==="SELL"?`<button class="text-button" data-action="allocation" data-id="${esc(t.id)}">Match lots</button>`:""}${t.id===state.transactions.at(-1)?.id?'<button class="text-button danger" data-action="undo">Undo last entered</button>':""}</div></div>`).join("") || '<div class="empty">Your imports and manual transactions will appear here.</div>'}</section>${Object.entries(
+  return `<section class="panel mini"><h2>Today’s decision note</h2><form id="note-form"><label>What did you learn or plan?<textarea name="note" maxlength="3000" placeholder="Why did I enter? What would make me exit?">${esc(state.notes[today()] || "")}</textarea></label><button>Save note</button></form></section><section class="panel"><div class="panel-title"><h2>Transaction history</h2><span>${tx.length} entries</span></div>${tx.map((t, i) => `<div class="history-row"><span class="side ${t.side.toLowerCase()}">${esc(t.side)}</span><div><b>${esc(t.symbol)}</b><small>${esc(t.date)} ${esc(t.tradeTime||"")} · ${t.corporateAction ? `Verified ${t.corporateAction.toLowerCase()} · ${t.side==="SPLIT"?`factor ${num(t.quantity)}:1`:`${num(t.quantity)} new shares`}` : `${num(t.quantity)} × ${money(t.price)} · Charges ${t.chargesKnown?money(t.charges):"unknown"}`}</small>${t.note ? `<small>${esc(t.note)}</small>` : ""}</div><span class="tag">${t.corporateAction ? "Share adjustment" : t.side === "BUY" ? esc(t.purpose) : "Diary sale"}</span><div class="row-actions"><button class="text-button" data-action="history" data-id="${esc(t.id)}">History</button>${t.corporateAction?"":`<button class="text-button" data-action="charges" data-id="${esc(t.id)}">Costs</button>`}${t.side==="SELL"?`<button class="text-button" data-action="allocation" data-id="${esc(t.id)}">Match lots</button>`:""}${!t.corporateAction&&t.id===state.transactions.at(-1)?.id?'<button class="text-button danger" data-action="undo">Undo last entered</button>':""}</div></div>`).join("") || '<div class="empty">Your imports and manual transactions will appear here.</div>'}</section>${state.rightsTrades?.length?`<section class="panel mini"><h2>Rights-entitlement trades</h2><p>Kept from the order history, separately from ordinary shares. These may originate from a rights issue rather than an order-history purchase. No acquisition cost or P&amp;L is invented.</p>${state.rightsTrades.map(t=>`<div class="kv"><span>${esc(t.date)} · ${esc(t.symbol)} · ${esc(t.side)} ${num(t.quantity)}</span><b>${money(t.price)} / unit</b></div>`).join('')}</section>`:''}${Object.entries(
     state.notes,
   )
     .filter(([, n]) => n.trim())
@@ -336,9 +384,8 @@ function uploadContent() {
 function referenceReports(kind){return state.referenceReports.filter(report=>!kind||report.kind===kind);}
 function reportPeriod(report){return report.period?.start&&report.period?.end?`${report.period.start} to ${report.period.end}`:'Period not identified';}
 function infoContent(a) {
-  const reports=referenceReports(),capital=referenceReports('capital-gains'),pnl=referenceReports('pnl');
-  const capitalEntries=capital.flatMap(report=>report.entries),tax=summarizeReferenceEntries(capitalEntries);
-  return `<section class="panel info-hero"><div><span class="eyebrow">ⓘ LOTBOOK GUIDE</span><h2>Every number has a source.</h2><p>LotBook keeps the diary, broker reports, and tax reference distinct. That makes it useful without pretending a broker summary is a trade ledger.</p></div><button class="secondary" data-action="privacy">${state.privacyMode?'Show amounts':'Hide amounts'} in public</button></section><section class="panel"><div class="panel-title"><div><h2>What the reports represent</h2><span>Diary stays in this browser</span></div></div><div class="report-grid"><article><b>Stocks Order History</b><p>Executed buy and sell records. This is the source for purchase lots, sale matching, diary P&amp;L, and remaining holdings.</p></article><article><b>Stock Holdings Statement</b><p>A point-in-time broker snapshot. It compares reported quantity and average price with the diary; it never creates a missing purchase.</p></article><article><b>Stocks P&amp;L</b><p>Groww’s realised and unrealised result view. It is a broker reference and can differ from chosen diary lots, costs, cut-off, and average-price conventions.</p></article><article><b>Capital Gains Statement</b><p>Groww’s realised short-term and long-term sale reference for the selected period. It supports tax review but does not calculate your final return.</p></article></div></section><section class="panel"><div class="panel-title"><div><h2>Tax reference from Capital Gains statements</h2><span>${capital.length?`${capital.length} report${capital.length===1?'':'s'} saved locally`:'No Capital Gains statement saved yet'}</span></div></div>${capital.length?`<div class="stats compact"><div class="stat-card"><span>Reported short-term P&amp;L</span><strong class="${tone(tax.shortTerm)}">${money(tax.shortTerm)}</strong><small>Groww-labelled short-term rows</small></div><div class="stat-card"><span>Reported long-term P&amp;L</span><strong class="${tone(tax.longTerm)}">${money(tax.longTerm)}</strong><small>Groww-labelled long-term rows</small></div><div class="stat-card"><span>Unclassified realised P&amp;L</span><strong class="${tone(tax.unclassified)}">${money(tax.unclassified)}</strong><small>Requires classification review</small></div></div><div class="reference-list">${capital.map(report=>{const s=summarizeReferenceEntries(report.entries);return `<div class="kv"><span><b>Capital Gains</b><small>${esc(reportPeriod(report))} · ${report.entries.length} reference rows</small></span><span>ST ${money(s.shortTerm)}<small>LT ${money(s.longTerm)} · Realised ${money(s.realised)}</small></span></div>`}).join('')}</div>`:`<div class="empty"><h3>Add your Capital Gains Statements</h3><p>Upload every financial-year report in Statements. They will appear here separately.</p><button data-view="import">Open Statements</button></div>`}<details class="info-details" open><summary>How tax treatment is shown</summary><p>For eligible listed equity where the statutory conditions are met, the current Income Tax Department references show short-term capital gains under section 111A at 20% and long-term gains under section 112A at 12.5%. The ₹1.25 lakh section 112A threshold applies to eligible long-term gains for the relevant year, not to the whole portfolio.</p><p>LotBook does <b>not</b> show a final tax payable figure. Final liability can depend on eligibility, STT, residential status, other income, set-off and carried-forward losses, grandfathering rules, surcharge, and 4% health and education cess. Use the Capital Gains statement and an ITR/tax professional for filing.</p><p><a href="https://www.incometax.gov.in/iec/foportal/help/all-topics/e-filing-services/itr-2/itr-2-UM" target="_blank" rel="noopener noreferrer">Income Tax Department: ITR-2 capital-gains guidance ↗</a> · <a href="https://www.incometax.gov.in/iec/foportal/help/individual/return-applicable-1" target="_blank" rel="noopener noreferrer">Income Tax Department: section 112A threshold reference ↗</a></p></details></section><section class="two-col"><section class="panel mini"><h2>Diary P&amp;L</h2><p><b>Result after recorded costs</b> is based on the purchase lots you chose for sales, plus only recorded transaction charges. It is useful for your journal and does not change your Groww records.</p><p><b>Diary FIFO comparison</b> applies FIFO to the diary’s loaded transactions only. It is not a broker or tax certificate.</p></section><section class="panel mini"><h2>Broker P&amp;L reference</h2><p>${pnl.length?`${pnl.length} P&amp;L report${pnl.length===1?' is':'s are'} saved. `:'No P&amp;L report saved yet. '}Groww’s realised/unrealised view may use its own average-price, timing, and statement rules. Compare it with the diary; do not expect different bases to be identical.</p><p><b>Recorded costs</b> means only fees supplied by a report or entered by you. Blank costs remain unknown, never assumed to be zero.</p></section></section><section class="panel mini"><h2>Privacy in public places</h2><p>Use <b>Hide amounts</b> in the header to mask currency values across LotBook while leaving the structure visible. It is a screen-privacy tool, not encryption. Anyone with access to this browser profile can still reveal the values, so export a backup before clearing browser data or changing devices.</p></section>`;
+  const pnl=referenceReports('pnl'),capital=referenceReports('capital-gains');
+  return `<section class="panel info-hero"><div><span class="eyebrow">ⓘ LOTBOOK GUIDE</span><h2>How your diary works</h2><p>Import executed orders to build purchase lots. For each sale, LotBook fills the lowest-price available lots first unless you choose specific lots.</p></div><button class="secondary" data-action="privacy">${state.privacyMode?'Show amounts':'Hide amounts'} in public</button></section><section class="panel"><h2>What each report does</h2><div class="report-grid"><article><b>Order History</b><p>Creates buys, sales and selected-lot diary results. Rights entitlements are kept separately, not treated as ordinary shares.</p></article><article><b>Holdings</b><p>Checks quantities as of the statement date. It never invents a missing purchase.</p></article><article><b>Profit &amp; Loss</b><p>Saved as a broker reference only. ${pnl.length} report${pnl.length===1?'':'s'} stored on this device.</p></article><article><b>Capital Gains</b><p>Saved as a broker reference only. ${capital.length} report${capital.length===1?'':'s'} stored. LotBook does not calculate taxes.</p></article></div></section><section class="two-col"><section class="panel mini"><h2>Profit figures</h2><p><b>Sold lots</b> show the result from the chosen acquisition lots, less recorded costs. If fees are missing, the figure is provisional. <b>Unrealised P&amp;L</b> values only shares still held at an available quote.</p><p>Changing the lot match changes the diary attribution, not the actual broker proceeds or account wealth.</p></section><section class="panel mini"><h2>Market prices</h2><p>Quotes are best-effort, can be delayed and may be unavailable. Their source and timestamp appear under each stock. No statement or share count is sent to the quote service.</p></section></section><section class="panel mini"><h2>Privacy and backup</h2><p>Hide amounts masks values on screen, but is not encryption. The diary is stored in this browser, so export a backup before clearing browser data or changing devices.</p></section>`;
 }
 function marketSettings() {
   const connected = Boolean(localStorage.getItem(MARKET_KEY));
@@ -369,9 +416,11 @@ function stockDetail(symbol) {
     h = a.holdings.find((h) => h.symbol === symbol);
   if (!h) return;
   const tx = state.transactions.filter((t) => t.symbol === symbol);
+  const soldCycles=a.cycles.filter(c=>c.symbol===symbol);
+  const soldNet=soldCycles.reduce((sum,c)=>sum+c.net,0);
   modal(
     symbol + " · Lot history",
-    `<div class="detail-summary"><div><small>Shares held</small><strong>${num(h.quantity)}</strong></div><div><small>Diary average</small><strong>${money(h.averageCost)}</strong></div><div><small>Core / trading</small><strong>${num(h.coreQuantity)} / ${num(h.tradingQuantity)}</strong></div></div><div class="row-actions"><button data-action="buystock">＋ Purchase</button><button data-action="sell" ${h.quantity <= 0 ? "disabled" : ""}>Record sale</button><button class="secondary" data-action="quote">Update price</button></div><h3>Every purchase lot</h3><p class="fine">Choose purpose per lot. A sale can be matched to a specific purchase or split across lots.</p>${h.lots.map((l) => `<div class="lot-row"><div><b>${money(l.price)} per share</b><small>${esc(l.date)} · Bought ${num(l.quantity)} · Remaining ${num(l.remaining)}</small></div><select class="lot-purpose" data-id="${esc(l.id)}" aria-label="Purpose for lot bought ${esc(l.date)} at ${l.price}"><option value="core" ${l.purpose === "core" ? "selected" : ""}>Core</option><option value="trading" ${l.purpose === "trading" ? "selected" : ""}>Trading</option></select></div>`).join("")}<h3>Stock transaction history</h3>${tx.map((t) => `<div class="kv"><span>${esc(t.date)} · ${esc(t.side)} ${num(t.quantity)}</span><b>${money(t.price)}</b></div>`).join("")}`,
+    `<div class="detail-summary"><div><small>Shares held</small><strong>${num(h.quantity)}</strong></div><div><small>Diary average</small><strong>${money(h.averageCost)}</strong></div><div><small>Core / trading</small><strong>${num(h.coreQuantity)} / ${num(h.tradingQuantity)}</strong></div></div>${soldCycles.length?`<p class="stock-sold"><b>Sold shares · diary P&amp;L: ${money(soldNet)}</b><br><small>${soldCycles.length} lot closure${soldCycles.length===1?'':'s'} · after recorded costs. Broker and tax P&amp;L may differ.</small></p>`:''}<div class="row-actions"><button data-action="buystock">＋ Purchase</button><button data-action="sell" ${h.quantity <= 0 ? "disabled" : ""}>Record sale</button><button class="secondary" data-action="quote">Update price</button></div><h3>Every purchase lot</h3><p class="fine">Automatic matching starts with the cheapest available lot. You can change a sale's allocation in Diary.</p>${h.lots.map((l) => `<div class="lot-row"><div><b>${money(l.price)} per share</b><small>${esc(l.date)} · Bought ${num(l.quantity)} · Remaining ${num(l.remaining)}</small></div><select class="lot-purpose" data-id="${esc(l.id)}" aria-label="Purpose for lot bought ${esc(l.date)} at ${l.price}"><option value="core" ${l.purpose === "core" ? "selected" : ""}>Core</option><option value="trading" ${l.purpose === "trading" ? "selected" : ""}>Trading</option></select></div>`).join("")}<h3>Stock transaction history</h3>${tx.map((t) => `<div class="kv"><span>${esc(t.date)} · ${esc(t.side)} ${num(t.quantity)}</span><b>${money(t.price)}</b></div>`).join("")}`,
   );
 }
 function saleForm() {
@@ -492,9 +541,25 @@ async function importFile(file, kind) {
     const p = reference ? await parseReferenceStatement(file, kind) : await parseStatement(file, kind);
     if(run!==importRun)return;
     pending = { ...p, kind, reference };
+    await checkImportShareEvents(pending);
+    if(run!==importRun)return;
     importPreview();
   } catch (e) {
     if(run===importRun)modal('Statement could not be read',`<p class="notice error" role="alert">${esc(e.message)}</p><p>Nothing was saved. Use an unprotected CSV/XLSX export, or the template below. PDF text is a local reference, not a reliable transaction table.</p><button data-action="template">Download trade template</button>`);
+  }
+}
+async function checkImportShareEvents(p) {
+  if(!p.transactions?.length)return;
+  const initial=prepareTradeReplacement(p.transactions);
+  const symbols=[...new Set(initial.errors.filter(e=>/insufficient available quantity/.test(e.message)).map(e=>initial.transactions.find(t=>t.id===e.id)?.symbol).filter(Boolean))];
+  if(!symbols.length)return;
+  p.shareEvents=[];p.shareNotes=[];
+  notify('Checking share changes for this statement…');
+  for(const symbol of symbols){
+    const first=p.transactions.filter(t=>t.symbol.toUpperCase()===symbol&&t.side==='BUY').map(t=>t.date).sort()[0];
+    if(!first)continue;
+    try { p.shareEvents.push(...await fetchVerifiedShareEvents(symbol,first)); }
+    catch(error){p.shareNotes.push(`${symbol}: ${error.message} Retry the share check while online.`);}
   }
 }
 function referencePreview(){
@@ -506,18 +571,19 @@ function referencePreview(){
 function importPreview() {
   const p = pending;
   if(p.reference){referencePreview();return;}
-  const warnings = (p.warnings || []).map((w) =>
+  const warnings = [...(p.warnings || []).filter(w=>!/^Skipped \d+ (metadata|footer)/.test(String(w))),...(p.shareNotes||[])].map((w) =>
     typeof w === "string" ? w : w.message || JSON.stringify(w),
   );
-  const plan=p.transactions?.length?prepareTradeReplacement(p.transactions):null;
+  const plan=p.transactions?.length?prepareTradeReplacement(p.transactions,undefined,p.shareEvents||[]):null;
   const blockers=[...(p.blockingErrors||[]),...(plan?.conflicts||[]),...(plan?.errors||[]).map(e=>e.message)];
+  const rightsCount=plan?.rightsTrades?.length||0;
   const labels={symbol:'Stock symbol',date:'Execution date',side:'Buy / sell',quantity:'Quantity',price:p.kind==='holdings'?'Average buy price (optional)':'Price per share (optional if total value)',tradeValue:'Gross total trade value (optional if price)',charges:'Total charges (optional)',companyName:'Company name (optional)',isin:'ISIN (optional)',tradeTime:'Execution time (optional)',tradeQuantity:'Executed quantity (optional)',status:'Order status (optional)',exchange:'Exchange (optional)',orderId:'Order ID (optional)',exchangeOrderId:'Exchange order ID (optional)',tradeId:'Trade / execution ID (optional)'};
   const fields=p.kind==='trades'?['symbol','date','side','quantity','price','tradeValue','charges','companyName','isin','tradeTime','tradeQuantity','status','exchange','orderId','exchangeOrderId','tradeId']:['symbol','quantity','price','isin'];
   const mapping=!p.fatal&&p.headers?.length?`<details ${p.mappingRequired?'open':''}><summary>Review or change column mapping</summary><form id="mapping-form"><div class="form-grid">${fields.map(k=>`<label>${labels[k]}<select name="${k}"><option value="">Not supplied</option>${p.headers.map((h,i)=>`<option value="${i}" ${p.columns?.[k]===i?'selected':''}>${esc(h)}</option>`).join('')}</select></label>`).join('')}</div><button>Read matched columns</button></form></details>`:'';
-  const issues=(p.rowIssues||[]).length;
+  const issues=(p.rowIssues||[]).filter(issue=>issue.code==='invalid-row').length;
   const valueBasis=p.transactions?.some(t=>t.priceSource==='trade-value');
   if (plan) {
-    modal('Replace diary from broker history', `<div class="notice"><b>${state.transactions.length} existing diary trades will be removed.</b> This includes manual test trades such as Reliance. The ${plan.added} executed trades in this file will become the entire diary history; old snapshots, reference reports, manual prices, cash and import logs will also be cleared. Export a backup first if you may need them.</div>${warnings.length?`<details open><summary>${warnings.length} file notes</summary><ul>${warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></details>`:''}${blockers.length?`<div class="notice error" role="alert">Import blocked: ${blockers.slice(0,8).map(esc).join('<br>')}</div>`:''}${mapping}<p><b>${plan.added} executed trades</b>${plan.applied.length?` · ${plan.applied.length} verified bonus event added`:''}</p><div class="preview-list">${p.transactions.map((t,i)=>`<div class="preview-row"><div><b>${esc(t.symbol)} · ${esc(t.side)}</b><small>${esc(t.date)} ${esc(t.tradeTime||'')}</small><small>${num(t.quantity)} × ${money(t.price)}</small></div>${t.side==='BUY'?`<select class="import-purpose" data-index="${i}" aria-label="Purpose for ${esc(t.symbol)}"><option value="core" ${t.purpose!=='trading'?'selected':''}>Core</option><option value="trading" ${t.purpose==='trading'?'selected':''}>Trading</option></select>`:''}</div>`).join('')}</div><label class="check-label"><input type="checkbox" id="executed-confirm">This is my complete executed equity order history and I want to replace the old diary.</label>${valueBasis?'<label class="check-label"><input type="checkbox" id="value-confirm">The source Value is the gross executed amount excluding charges.</label>':''}${issues?'<label class="check-label"><input type="checkbox" id="issues-confirm">I reviewed excluded rows and accept that this history may be incomplete.</label>':''}<button class="full" data-action="confirmimport" ${p.fatal||blockers.length?'disabled':''}>Replace diary with statement</button>`);
+    modal('Replace diary from broker history', `<div class="notice"><b>${state.transactions.length} existing diary trades will be replaced.</b> Export a backup if you need the old records. The new statement will become the diary.</div>${rightsCount?`<p class="fine"><b>${rightsCount} rights-entitlement trade${rightsCount===1?'':'s'}</b> will be retained separately in Diary. They cannot be matched to ordinary share purchases, so they are excluded from share-lot P&amp;L.</p>`:''}${warnings.length?`<details><summary>${warnings.length} file notes</summary><ul>${warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></details>`:''}${blockers.length?`<div class="notice error" role="alert">Import blocked: ${blockers.slice(0,8).map(esc).join('<br>')}</div>`:''}${blockers.length?'<button class="secondary" data-action="retryimportshares">Retry share-change check</button>':''}${mapping}<p><b>${plan.added} share trades</b>${rightsCount?` · ${rightsCount} rights trades`:''} · ${plan.adjustments.length ? `${plan.adjustments.length} verified share adjustment(s) included` : 'Share changes checked after saving.'}</p><div class="preview-list">${p.transactions.slice(0,20).map((t,i)=>`<div class="preview-row"><div><b>${esc(t.symbol)} · ${esc(t.side)}</b><small>${esc(t.date)} ${esc(t.tradeTime||'')}</small><small>${num(t.quantity)} × ${money(t.price)}</small></div>${t.side==='BUY'?`<select class="import-purpose" data-index="${i}" aria-label="Purpose for ${esc(t.symbol)}"><option value="core" ${t.purpose!=='trading'?'selected':''}>Core</option><option value="trading" ${t.purpose==='trading'?'selected':''}>Trading</option></select>`:''}</div>`).join('')}</div>${p.transactions.length>20?`<p class="fine">Showing 20 of ${p.transactions.length} trades. All parsed trades will be saved.</p>`:''}<label class="check-label"><input type="checkbox" id="executed-confirm">Replace my existing diary with this executed order history.</label>${valueBasis?'<label class="check-label"><input type="checkbox" id="value-confirm">The source Value is gross executed value excluding charges.</label>':''}${issues?'<label class="check-label"><input type="checkbox" id="issues-confirm">I reviewed excluded rows and accept that this history may be incomplete.</label>':''}<button class="full" data-action="confirmimport" ${p.fatal||blockers.length?'disabled':''}>Replace diary with statement</button>`);
     return;
   }
   modal(
@@ -544,9 +610,9 @@ function confirmImport() {
   if(p.transactions?.length){
     if(!$('#executed-confirm')?.checked)throw Error('Confirm that these are executed equity trades.');
     if($('#value-confirm')&&!$('#value-confirm').checked)throw Error('Verify that Value is gross executed value, excluding charges, then confirm its basis.');
-    const plan=prepareTradeReplacement(p.transactions);
+    const plan=prepareTradeReplacement(p.transactions,undefined,p.shareEvents||[]);
     if(plan.conflicts.length||plan.errors.length)throw Error('Import not saved: '+(plan.conflicts[0]||plan.errors[0].message));
-    next.transactions=plan.transactions;({added,skipped,updated}=plan);
+    next.transactions=plan.transactions;next.rightsTrades=plan.rightsTrades;({added,skipped,updated}=plan);
     next.snapshots=[];next.snapshotComplete=false;next.snapshotDate='';
     next.referenceReports=[];next.prices={};next.cash=null;next.imports=[];
     replacedTrades=true;
@@ -555,12 +621,6 @@ function confirmImport() {
     const date=$('#snapshot-date')?.value;
     if(!date)throw Error('Enter the snapshot as-of date.');
     next.snapshots=normalizeSnapshots(p.holdings,next.transactions);
-    const action=applyKnownCorporateActions(next.transactions);
-    if(action.applied.length){
-      const before=reconcileHoldings(next.transactions,next.snapshots,{complete:false});
-      const after=reconcileHoldings(action.transactions,next.snapshots,{complete:false});
-      if(after.every(row=>Math.abs(row.difference)<1e-8) && before.some(row=>Math.abs(row.difference)>1e-8)) next.transactions=action.transactions;
-    }
     next.snapshotComplete=$('#snapshot-complete')?.checked===true;
     next.snapshotDate=date;
   }
@@ -578,6 +638,10 @@ function confirmImport() {
   }
   pending = null;
   close();
+  if (replacedTrades || p.holdings?.length) {
+    localStorage.removeItem(ACTION_CHECK_KEY);
+    queueMicrotask(() => refreshCorporateActions(true));
+  }
   notify(
     `${p.transactions?.length?`Replaced diary with ${added} trades.`:''} ${p.holdings?.length||0} snapshot rows saved.`,
   );
@@ -713,6 +777,11 @@ document.addEventListener("click", (e) => {
       case "confirmimport":
         confirmImport();
         break;
+      case "retryimportshares": {
+        const target=pending;
+        void checkImportShareEvents(target).then(()=>{if(pending===target)importPreview();}).catch(error=>notify(error.message));
+        break;
+      }
       case "quote":
         modal(
           "Update manual price",
@@ -893,7 +962,7 @@ document.addEventListener("submit", (e) => {
           close();
         }
         break;
-      case "mapping-form":
+      case "mapping-form": {
         pending = {
           ...parseRows(
             pending,
@@ -907,7 +976,10 @@ document.addEventListener("submit", (e) => {
           kind: pending.kind,
         };
         importPreview();
+        const target=pending;
+        void checkImportShareEvents(target).then(()=>{if(pending===target)importPreview();}).catch(error=>notify(error.message));
         break;
+      }
     }
   });
 });

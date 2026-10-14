@@ -5,18 +5,27 @@ import { analyse, validateTransaction } from '../src/ledger.js';
 const buy = (id, overrides = {}) => ({ id, symbol: 'ABC', name: 'ABC Ltd', date: '2026-01-01', side: 'BUY', quantity: 10, price: 100, charges: 0, purpose: 'core', note: '', ...overrides });
 const sell = (id, overrides = {}) => buy(id, { date: '2026-01-03', side: 'SELL', price: 120, purpose: 'trading', ...overrides });
 
-test('chosen 1250 lot earns 200; independent broker FIFO loses 300; wealth agrees', () => {
+test('default fills lowest-price lot, independent broker FIFO differs, wealth agrees', () => {
   const buys = [buy('1300', { price: 1300 }), buy('1250', { date: '2026-01-02', price: 1250, purpose: 'trading' })];
   const chosen = analyse([...buys, sell('sale', { price: 1270, allocations: [{ lotId: '1250', quantity: 10 }] })], { ABC: 1270 });
   const fifo = analyse([...buys, sell('sale', { price: 1270 })], { ABC: 1270 });
   assert.equal(chosen.totals.realizedNet, 200);
   assert.equal(chosen.totals.fifoNet, -300);
-  assert.equal(fifo.totals.realizedNet, -300);
+  assert.equal(fifo.totals.realizedNet, 200);
   assert.equal(chosen.holdings[0].lots[0].id, '1300');
   assert.equal(chosen.holdings[0].cost, 13000);
   assert.equal(chosen.totals.realizedNet + chosen.totals.unrealized, fifo.totals.realizedNet + fifo.totals.unrealized);
   assert.equal(chosen.totals.currentValue, fifo.totals.currentValue);
   assert.equal(chosen.cycles[0].purpose, 'trading');
+});
+
+test('imported sale without allocation uses cheapest lot even when bought later',()=>{
+ const result=analyse([buy('dear',{quantity:1,price:100}),buy('cheap',{date:'2026-01-02',quantity:1,price:80}),sell('sale',{quantity:1,price:120})],{ABC:120});
+ assert.equal(result.errors.length,0);
+ assert.equal(result.totals.realizedNet,40);
+ assert.equal(result.totals.fifoNet,20);
+ assert.equal(result.holdings[0].lots.find(l=>l.id==='dear').remaining,1);
+ assert.equal(result.holdings[0].lots.find(l=>l.id==='cheap').remaining,0);
 });
 
 test('partial sales allocate actual buy and sell fees proportionally', () => {

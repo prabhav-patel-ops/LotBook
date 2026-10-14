@@ -48,22 +48,25 @@ export function validateTransaction(t) {
   const id = identifier(t.id, 'id');
   const symbol = identifier(t.symbol, 'symbol').toUpperCase();
   const side = identifier(t.side, 'side').toUpperCase();
-  if (side !== 'BUY' && side !== 'SELL') throw new Error('side must be BUY or SELL');
+  if (!['BUY', 'SELL', 'SPLIT'].includes(side)) throw new Error('side must be BUY, SELL or SPLIT');
+  if (side === 'SPLIT' && t.corporateAction !== 'SPLIT') throw Error('A split requires a verified share adjustment.');
   if (t.purpose !== 'core' && t.purpose !== 'trading') throw new Error('purpose must be core or trading');
   if (t.name !== undefined && typeof t.name !== 'string') throw new Error('name must be a string');
   if (t.note !== undefined && typeof t.note !== 'string') throw new Error('note must be a string');
   const normalized = {
     id, symbol, name: t.name?.trim() || symbol, date: dateValue(t.date), side,
-    quantity: number(t.quantity, 'quantity', true), price: number(t.price, 'price', t.corporateAction !== 'BONUS'),
+    quantity: number(t.quantity, 'quantity', true), price: number(t.price, 'price', !['BONUS','SPLIT'].includes(t.corporateAction)),
     charges: number(t.charges === undefined ? 0 : t.charges, 'charges'),
     purpose: t.purpose, note: t.note ?? '',
     // Old zero placeholders do not establish that the broker charged nothing.
     chargesKnown: typeof t.chargesKnown==='boolean' ? t.chargesKnown : Number(t.charges)>0,
   };
   if (t.corporateAction !== undefined) {
-    if (t.corporateAction !== 'BONUS' || side !== 'BUY' || normalized.price !== 0 || normalized.charges !== 0)
-      throw new Error('Invalid bonus-share transaction');
-    normalized.corporateAction = 'BONUS';
+    const bonus = t.corporateAction === 'BONUS' && side === 'BUY';
+    const split = t.corporateAction === 'SPLIT' && side === 'SPLIT' && normalized.quantity !== 1;
+    if ((!bonus && !split) || normalized.price !== 0 || normalized.charges !== 0)
+      throw new Error('Invalid share-adjustment transaction');
+    normalized.corporateAction = t.corporateAction;
     normalized.chargesKnown = true;
   }
   for (const field of ['isin','exchange','orderId','exchangeOrderId','tradeId']) {
@@ -89,7 +92,7 @@ export function validateTransaction(t) {
   return normalized;
 }
 
-function selectLots(t, lots, explicit) {
+function selectLots(t, lots, explicit, lowestFirst = false) {
   if (explicit) {
     return t.allocations.map(a => {
       const lot = lots.find(l => l.id === a.lotId);
@@ -102,7 +105,8 @@ function selectLots(t, lots, explicit) {
   }
   let left = t.quantity;
   const selected = [];
-  for (const lot of lots) {
+  const candidates = lowestFirst ? [...lots].sort((a, b) => a.price - b.price || a.date.localeCompare(b.date) || a.id.localeCompare(b.id)) : lots;
+  for (const lot of candidates) {
     if (lot.symbol !== t.symbol || lot.remaining <= 0) continue;
     const quantity = Math.min(left, lot.remaining);
     selected.push({ lot, quantity });
@@ -119,8 +123,10 @@ export function orderedTransactions(transactions) {
  transactions.forEach((t,index)=>{if(!dateGroups.has(t.date))dateGroups.set(t.date,[]);dateGroups.get(t.date).push({t,index});});
  const ordered=[];
  for(const [,entries] of [...dateGroups].sort(([a],[b])=>a.localeCompare(b))){
-  if(entries.every(e=>e.t.tradeTime))entries.sort((a,b)=>a.t.tradeTime.localeCompare(b.t.tradeTime)||a.index-b.index);
-  ordered.push(...entries.map(e=>e.t));
+  const actions=entries.filter(e=>e.t.corporateAction);
+  const trades=entries.filter(e=>!e.t.corporateAction);
+  if(trades.length && trades.every(e=>e.t.tradeTime))trades.sort((a,b)=>a.t.tradeTime.localeCompare(b.t.tradeTime)||a.index-b.index);
+  ordered.push(...actions.map(e=>e.t),...trades.map(e=>e.t));
  }
  return ordered;
 }
@@ -155,7 +161,7 @@ function consume(selected) {
  * (YYYY-MM), sorted oldest first, and rounded after summing unrounded cycles.
  * Monthly charges include only fees allocated to those realized cycles.
  */
-export function analyse(transactions, prices = {}) {
+export function analyse(transactions, prices = {}, policy = 'lowest') {
   if (!Array.isArray(transactions)) throw new Error('transactions must be an array');
   const errors = [], valid = [], lots = [], fifoLots = [], rawCycles = [];
   const ids = new Set();
@@ -174,8 +180,22 @@ export function analyse(transactions, prices = {}) {
         const lot = { ...t, remaining: t.quantity };
         lots.push(lot);
         fifoLots.push({ ...lot });
+      } else if (t.side === 'SPLIT') {
+        const affected = lots.filter(lot => lot.symbol === t.symbol && lot.remaining > 0);
+        const fifoAffected = fifoLots.filter(lot => lot.symbol === t.symbol && lot.remaining > 0);
+        if (!affected.length || !fifoAffected.length) throw Error(`No held ${t.symbol} shares existed before the split.`);
+        for (const lot of [...affected, ...fifoAffected]) {
+          finite(lot.quantity * t.quantity);
+          finite(lot.remaining * t.quantity);
+          finite(lot.price / t.quantity);
+        }
+        for (const lot of [...affected, ...fifoAffected]) {
+          lot.quantity = quantityOut(lot.quantity * t.quantity);
+          lot.remaining = quantityOut(lot.remaining * t.quantity);
+          lot.price /= t.quantity;
+        }
       } else {
-        const selected = selectLots(t, lots, t.allocations !== undefined);
+        const selected = selectLots(t, lots, t.allocations !== undefined, policy !== 'fifo');
         const fifoSelected = selectLots(t, fifoLots, false);
         const cycles = calculate(t, selected);
         const fifoCycles = calculate(t, fifoSelected);

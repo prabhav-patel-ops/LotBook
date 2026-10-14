@@ -1,4 +1,13 @@
-# Import reliability release verification — 28 September 2026
+# LotBook 1.3.0 verification — 14 October 2026
+
+- 149 automated tests passed, covering cheapest-lot matching, rights-entitlement separation and backup retention, legacy explicit-allocation recovery, verified bonus/split handling, chronological multiple actions and snapshot-date cutoffs.
+- Production build passed; production dependency audit reported zero known vulnerabilities.
+- Headless Edge at 390 × 844: sold-lot P&L visible, no page overflow, a 424-row synthetic import confirmed and replaced prior test history, and a rights-entitlement sale remained in Diary separately.
+- Live public-source checks: NSDL's BSE price and timestamp returned through the generic quote fallback; LICI's bonus factor was matched against NSE. The relay intermittently omits source content; unmatched events remain unapplied and can be retried.
+- No personal statement, backup, account identifier or private position was published. Market requests contain public tickers and history parameters; purchase dates are filtered locally.
+- Physical phone installation and the reporting user's exact 424-trade file were not directly tested. Synthetic reproduction covers the screenshot's STALL-RE blocker. The free external services remain best-effort.
+
+## Earlier release record — 28 September 2026
 
 ## Passed
 

@@ -3,12 +3,29 @@ import assert from 'node:assert/strict';
 import {
   marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, parseIndianQuote,
   fetchIndianQuote, marketIntervalMs, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY,
+  fetchYahooFallback,
 } from '../src/market-data.js';
 
 test('maps Groww-style symbols without guessing company names', () => {
   assert.deepEqual(marketTicker('NSE:RELIANCE'), { exchange: 'NSE', ticker: 'RELIANCE' });
   assert.deepEqual(marketTicker('500325.BO'), { exchange: 'BSE', ticker: '500325' });
   assert.equal(marketTicker('HDFC BANK'), null);
+  assert.deepEqual(marketTicker('NSDL$'), {exchange:'NSE',ticker:'NSDL'});
+});
+
+test('BSE-only stock gets a quote only when Yahoo company identity matches the holding',async()=>{
+ const requested=[];
+ const fetcher=async url=>{
+  requested.push(url);
+  const bse=url.includes('NSDL.BO');
+  const body=bse?{chart:{result:[{meta:{symbol:'NSDL.BO',currency:'INR',longName:'National Securities Depository Limited',regularMarketPrice:740.5,regularMarketTime:Math.floor(Date.now()/1000)}}],error:null}}:{chart:{result:null,error:{code:'Not Found'}}};
+  return {ok:true,text:async()=>`Markdown Content:\n${JSON.stringify(body)}`};
+ };
+ const quote=await fetchYahooFallback('NSDL$',fetcher,'National Securities Depository');
+ assert.equal(quote.price,740.5);
+ assert.equal(quote.exchange,'BSE');
+ assert.equal(requested.length,2);
+ await assert.rejects(fetchYahooFallback('NSDL$',fetcher,'Unrelated Company'),/identity/);
 });
 
 test('refresh interval defaults to an hour and accepts only approved free-credit settings', () => {
