@@ -447,6 +447,14 @@ p {
   color: #6c8170;
   line-height: 1.35;
 }
+.holding-row .stock-sold,
+.stock-sold {
+  color: #315b49;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.stock-sold { overflow-wrap: anywhere; }
+.holding-row > div { min-width: 0; }
 .stock-main b {
   overflow-wrap: anywhere;
 }
@@ -686,6 +694,7 @@ small {
   overflow-y: auto;
   padding: 25px;
 }
+.dialog .preview-list { max-height: 32dvh; overflow-y: auto; }
 .dialog-title {
   display: flex;
   align-items: center;

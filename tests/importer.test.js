@@ -165,7 +165,7 @@ test('numeric preview mappings and a status-only recognised header retain safety
   const genericMapped = parseRows([generic.headers, ...generic.rows], 'trades', mapping);
   assert.equal(genericMapped.transactions.length, 1);
   assert.equal(genericMapped.transactions[0].chargesKnown, false);
-  assert.ok(genericMapped.warnings.some(warning => warning.includes('Fees are unknown')));
+  assert.ok(!genericMapped.warnings.some(warning => warning.includes('Fees are unknown')));
 });
 
 test('holdings avgPrice headers and mappings are supported without applying order status', () => {
@@ -312,7 +312,7 @@ test('synthetic Groww CSV keeps Symbol, gross Value, metadata, row provenance an
   assert.deepEqual(result.transactions.map(row => row.exchangeOrderId), ['000000100001', '000000100002', '000000100003']);
   assert.ok(result.transactions.every(row => row.orderId === undefined));
   assert.ok(result.transactions.every(row => row.chargesKnown === false && row.charges === 0 && row.priceSource === 'trade-value'));
-  assert.ok(result.warnings.some(warning => warning.includes('unknown, not confirmed zero')));
+  assert.ok(!result.warnings.some(warning => warning.includes('unknown, not confirmed zero')));
   assert.equal(result.sourceRows.length, 4);
   assert.equal(result.rowIssues.length, 1);
   assert.equal(result.rowIssues[0].sourceRow, 9);
@@ -404,7 +404,7 @@ test('fees are known only for a supplied valid fee including explicit zero', () 
   assert.deepEqual(result.transactions.map(row => row.chargesKnown), [false, true, true]);
   assert.deepEqual(result.transactions.map(row => row.charges), [0, 0, 2.5]);
   assert.equal(result.rowIssues.length, 2);
-  assert.ok(result.warnings.some(warning => warning.includes('1 imported trade')));
+  assert.ok(!result.warnings.some(warning => warning.includes('1 imported trade')));
 });
 
 test('source rows include blank gaps and unsupported records; ticker-like footers are never dropped', () => {

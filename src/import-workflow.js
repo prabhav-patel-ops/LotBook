@@ -55,34 +55,64 @@ export function planTransactions(existing, incoming, createId=()=>crypto.randomU
  return {transactions,added,skipped,updated,conflicts,errors};
 }
 
-// Exchange-verified events only. LICI's 2026 event was a 1:1 bonus, not a split.
-// Bonus shares are separate zero-cost lots; original acquisition cost is unchanged.
-export const KNOWN_BONUSES = [{symbol:'LICI',isin:'INE0J1Y01017',exDate:'2026-05-29',creditDate:'2026-06-01',ratio:1}];
-
-export function applyKnownCorporateActions(transactions) {
- let next=transactions.map(t=>validateTransaction(t)), applied=[];
- for(const event of KNOWN_BONUSES){
-  const eventId=`bonus:${event.symbol}:${event.creditDate}`;
-  if(next.some(t=>t.id===eventId||t.symbol===event.symbol&&t.corporateAction==='BONUS'&&t.date===event.creditDate))continue;
-  const before=next.filter(t=>t.date<event.exDate);
-  const pre=analyse(before);
-  if(pre.errors.length)continue;
-  const eligible=pre.holdings.find(h=>h.symbol===event.symbol)?.quantity||0;
-  if(eligible<=0)continue;
-  const source=before.find(t=>t.symbol===event.symbol);
-  if(before.some(t=>t.symbol===event.symbol&&t.isin&&t.isin!==event.isin))continue;
-  const bonus=validateTransaction({id:eventId,symbol:event.symbol,isin:event.isin,name:source?.name||event.symbol,
-    date:event.creditDate,side:'BUY',quantity:eligible*event.ratio,price:0,charges:0,chargesKnown:true,
-    purpose:source?.purpose||'core',corporateAction:'BONUS',note:'Verified 1:1 bonus; NSE ex/record date 2026-05-29.'});
-  next=[...next,bonus];applied.push(bonus);
+/** Apply only Yahoo-detected share factors independently confirmed by NSE.
+ * A price drop alone never changes share count. A current broker snapshot must
+ * agree with the resulting quantity before any saved history is changed.
+ */
+export function applyVerifiedCorporateActions(transactions, events, snapshots = [], snapshotDate = '') {
+ let next=transactions.map(t=>validateTransaction(t));
+ const applied=[], issues=[],groups=new Map();
+ for(const event of [...events].sort((a,b)=>a.exDate.localeCompare(b.exDate))){
+  if(!/^[A-Z0-9&._-]+$/.test(event.symbol)||!/^\d{4}-\d{2}-\d{2}$/.test(event.exDate)||
+     !['BONUS','SPLIT'].includes(event.type)||!Number.isFinite(event.factor)||event.factor<=0||event.factor>100||event.factor===1||event.source!=='NSE + Yahoo'){
+    issues.push('A share event had invalid or unverified details.');continue;
+  }
+  if(!groups.has(event.symbol))groups.set(event.symbol,[]);
+  groups.get(event.symbol).push(event);
  }
- return {transactions:next,applied};
+ for(const [symbol,stockEvents] of groups){
+  const candidate=next.filter(t=>t.symbol===symbol), staged=[];
+  let failed=false;
+  for(const event of stockEvents){
+   const id=`share:${event.type.toLowerCase()}:${symbol}:${event.exDate}`;
+   if(candidate.some(t=>t.id===id || t.corporateAction===event.type && t.date>=event.exDate && Date.parse(t.date)-Date.parse(event.exDate)<=14*86400000))continue;
+   const before=candidate.filter(t=>t.date<event.exDate),pre=analyse(before);
+   if(pre.errors.length){failed=true;break;}
+   const holding=pre.holdings.find(h=>h.symbol===symbol);
+   if(!holding?.quantity)continue;
+   const source=before.find(t=>t.side==='BUY');
+   const isins=new Set(before.filter(t=>t.isin).map(t=>t.isin));
+   if(isins.size>1){failed=true;break;}
+   const quantity=event.type==='BONUS'?holding.quantity*(event.factor-1):event.factor;
+   if(!Number.isFinite(quantity)||quantity<=0 || event.type==='BONUS'&&Math.abs(quantity-Math.round(quantity))>1e-6){failed=true;break;}
+   const action=validateTransaction({id,symbol,isin:source?.isin,name:source?.name||symbol,
+     date:event.exDate,side:event.type==='BONUS'?'BUY':'SPLIT',quantity,price:0,charges:0,chargesKnown:true,
+     purpose:source?.purpose||'core',corporateAction:event.type,
+     note:`${event.type==='BONUS'?'Bonus':'Split'} factor ${event.factor}:1; Yahoo factor and NSE corporate action agree.`});
+   candidate.push(action);staged.push(action);
+  }
+  if(!staged.length&&!failed)continue;
+  if(failed||analyse(candidate).errors.length){issues.push(`${symbol}: share changes need complete trade history or fractional-entitlement review.`);continue;}
+  const snapshot=snapshots.find(s=>s.symbol===symbol);
+  if(snapshot&&snapshotDate&&staged.some(t=>t.date<=snapshotDate)){
+   const atDate=analyse(candidate.filter(t=>t.date<=snapshotDate));
+   if(atDate.errors.length||Math.abs((atDate.holdings.find(h=>h.symbol===symbol)?.quantity||0)-snapshot.quantity)>1e-6){
+    issues.push(`${symbol}: verified share events do not match the dated broker snapshot; nothing was changed.`);continue;
+   }
+  }
+  next.push(...staged);applied.push(...staged);
+ }
+ return {transactions:next,applied,issues};
 }
 
 /** A full broker order-history import replaces the diary, never merges test trades. */
-export function prepareTradeReplacement(incoming, createId=()=>crypto.randomUUID()) {
+export function prepareTradeReplacement(incoming, createId=()=>crypto.randomUUID(), events=[]) {
  const imported=incoming.map(raw=>validateTransaction({...raw,id:createId(),purpose:raw.purpose||'core'}));
- const {transactions,applied}=applyKnownCorporateActions(imported);
+ // NSE rights entitlements have a separate ISIN and may be credited by a corporate
+ // issue, not acquired in the order-history file. Do not invent an equity purchase.
+ const rightsTrades=imported.filter(t=>/-RE$/.test(t.symbol));
+ const adjusted=applyVerifiedCorporateActions(imported.filter(t=>!/-RE$/.test(t.symbol)),events);
+ const transactions=adjusted.transactions;
  const errors=analyse(transactions).errors;
  const seen=new Set();
  for(const trade of imported){
@@ -90,7 +120,7 @@ export function prepareTradeReplacement(incoming, createId=()=>crypto.randomUUID
   if(ref&&seen.has(ref))errors.push({id:trade.id,message:`Duplicate source trade execution ${trade.tradeId} on ${trade.date}. Review the statement.`});
   if(ref)seen.add(ref);
  }
- return {transactions,applied,errors,added:imported.length,skipped:0,updated:0,conflicts:[]};
+ return {transactions,rightsTrades,errors,added:imported.length-rightsTrades.length,adjustments:adjusted.applied,skipped:0,updated:0,conflicts:adjusted.issues};
 }
 
 /** Match reported identifiers exactly; never use fuzzy name guesses. */

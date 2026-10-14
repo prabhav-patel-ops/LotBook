@@ -389,7 +389,8 @@ export function parseRows(input, kind = 'trades', mapping = null) {
   }
   if (skipped) result.warnings.push(`Skipped ${skipped} row(s) with missing or invalid required fields: ${[...reasons].map(([reason, count]) => `${reason} (${count})`).join(', ')}.`);
   if (footerCount) result.warnings.push(`Skipped ${footerCount} footer or repeated-header row(s).`);
-  if (unknownCharges) result.warnings.push(`Charges are missing for ${unknownCharges} imported trade(s). Fees are unknown, not confirmed zero; the numeric 0 is a placeholder. Review actual transaction fees before relying on net results. No fees or income taxes were estimated.`);
+  // Missing fees remain marked unknown on each trade and in the diary, not as a
+  // large import warning that obscures actionable parsing errors.
   if (unknownTimes) result.warnings.push(`Execution time is unknown for ${unknownTimes} imported trade(s) with an invalid or conflicting optional clock. The trade dates were retained; no time was guessed. Keep source order for any same-day group with unknown times.`);
   if (unknownAveragePrices) result.warnings.push(`Average acquisition price is missing for ${unknownAveragePrices} holdings snapshot(s). Quantity was retained with avgPrice=null; cost is unknown. Market/holding Value was not used as acquisition cost and no purchases were invented.`);
   if (terminatedFills) result.warnings.push(`Retained ${terminatedFills} executed fill(s) from cancelled/expired orders using explicit executed quantity and execution price/trade value. The remaining order quantity was not imported. Review these source rows.`);

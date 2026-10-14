@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {analyse} from '../src/ledger.js';
-import {prepareTradeReplacement, reconcileHoldings} from '../src/import-workflow.js';
+import {prepareTradeReplacement, applyVerifiedCorporateActions, reconcileHoldings} from '../src/import-workflow.js';
 import {fresh, validateBackup} from '../src/storage.js';
 
 const buy=(symbol,date,quantity,price,id)=>({id,symbol,date,side:'BUY',quantity,price,charges:0,chargesKnown:true,purpose:'core'});
+const event=(symbol='LICI',type='BONUS',factor=2,exDate='2026-05-29')=>({symbol,type,factor,exDate,source:'NSE + Yahoo'});
 
-test('complete statement replacement excludes old manual Reliance and preserves valid statement lots',()=>{
+test('complete statement replacement excludes old manual Reliance',()=>{
  const old=buy('RELIANCE','2026-01-01',2,1000,'manual-reliance');
  const replacement=prepareTradeReplacement([buy('TCS','2026-10-01',3,2000,'source')],()=> 'new-tcs');
  assert.equal(replacement.errors.length,0);
@@ -15,32 +16,114 @@ test('complete statement replacement excludes old manual Reliance and preserves 
  assert.equal(state.transactions.some(t=>t.id===old.id),false);
 });
 
-test('LICI 1:1 bonus creates a separate zero-cost lot exactly once',()=>{
- const purchase=buy('LICI','2026-05-01',4,900,'lic-buy');
- const first=prepareTradeReplacement([purchase],()=> 'purchase-1');
- assert.equal(first.errors.length,0);
- assert.equal(first.applied.length,1);
- assert.equal(first.applied[0].quantity,4);
- assert.equal(first.applied[0].price,0);
- assert.equal(first.applied[0].corporateAction,'BONUS');
- const holdings=analyse(first.transactions).holdings.find(h=>h.symbol==='LICI');
- assert.equal(holdings.quantity,8);
- assert.equal(holdings.cost,3600);
- assert.equal(holdings.averageCost,450);
- assert.equal(reconcileHoldings(first.transactions,[{symbol:'LICI',quantity:8,averageCost:450}])[0].difference,0);
- const restored=validateBackup({...fresh(),transactions:first.transactions});
- assert.equal(restored.transactions.find(t=>t.corporateAction==='BONUS')?.price,0);
+test('rights-entitlement sales remain visible but never block equity replacement or invent lots',()=>{
+ const rows=[buy('ABC','2026-01-01',2,100,'a'),
+  {id:'rights',symbol:'STALL-RE',date:'2026-01-02',side:'SELL',quantity:11,price:3,charges:0,chargesKnown:false,purpose:'core'},
+  {id:'sell',symbol:'ABC',date:'2026-01-03',side:'SELL',quantity:1,price:120,charges:0,chargesKnown:false,purpose:'core'}];
+ const plan=prepareTradeReplacement(rows,(()=>{let i=0;return()=>`import-${++i}`;})());
+ assert.equal(plan.errors.length,0);
+ assert.equal(plan.added,2);
+ assert.deepEqual(plan.rightsTrades.map(t=>t.symbol),['STALL-RE']);
+ const state=validateBackup({...fresh(),transactions:plan.transactions,rightsTrades:plan.rightsTrades});
+ assert.equal(state.rightsTrades[0].quantity,11);
+ assert.equal(analyse(state.transactions).totals.realizedNet,20);
 });
 
-test('no bonus is invented for purchases after ex-date or another LIC symbol',()=>{
- const after=prepareTradeReplacement([buy('LICI','2026-06-02',2,500,'after')],()=> 'after-id');
- const other=prepareTradeReplacement([buy('LICHSGFIN','2026-05-01',2,500,'other')],()=> 'other-id');
- assert.equal(after.applied.length,0);
- assert.equal(other.applied.length,0);
+test('verified LICI bonus repairs existing saved holdings and cost without a re-import',()=>{
+ const transactions=[buy('LICI','2026-05-01',4,900,'lic-buy')];
+ const snapshots=[{symbol:'LICI',quantity:8,averageCost:450}];
+ const result=applyVerifiedCorporateActions(transactions,[event()],snapshots,'2026-10-13');
+ assert.equal(result.issues.length,0);
+ assert.equal(result.applied.length,1);
+ assert.equal(result.applied[0].quantity,4);
+ assert.equal(result.applied[0].price,0);
+ assert.equal(result.applied[0].corporateAction,'BONUS');
+ const holding=analyse(result.transactions,{LICI:450}).holdings.find(h=>h.symbol==='LICI');
+ assert.equal(holding.quantity,8);
+ assert.equal(holding.cost,3600);
+ assert.equal(holding.averageCost,450);
+ assert.equal(holding.unrealized,0);
+ assert.equal(reconcileHoldings(result.transactions,snapshots)[0].difference,0);
+ validateBackup({...fresh(),transactions:result.transactions});
+ assert.equal(applyVerifiedCorporateActions(result.transactions,[event()],snapshots,'2026-10-13').applied.length,0);
+});
+
+test('events do not invent shares for post-ex-date buyers or a different symbol',()=>{
+ assert.equal(applyVerifiedCorporateActions([buy('LICI','2026-06-02',2,500,'after')],[event()]).applied.length,0);
+ assert.equal(applyVerifiedCorporateActions([buy('LICHSGFIN','2026-05-01',2,500,'other')],[event()]).applied.length,0);
+});
+
+test('broker snapshot mismatch and unverified factor block automatic adjustment',()=>{
+ const transactions=[buy('LICI','2026-05-01',4,900,'lic-buy')];
+ const missing=applyVerifiedCorporateActions(transactions,[event()]);
+ assert.equal(missing.applied.length,1);
+ const mismatch=applyVerifiedCorporateActions(transactions,[event()],[{symbol:'LICI',quantity:7}], '2026-10-13');
+ assert.equal(mismatch.applied.length,0);
+ assert.match(mismatch.issues[0],/snapshot/);
+ assert.equal(applyVerifiedCorporateActions(transactions,[{...event(),source:'Yahoo'}]).applied.length,0);
+});
+
+test('generic verified split scales pre-event lots and preserves invested cost',()=>{
+ const transactions=[buy('ABC','2026-01-01',4,800,'old'),buy('ABC','2026-07-01',2,410,'new')];
+ const result=applyVerifiedCorporateActions(transactions,[event('ABC','SPLIT',2,'2026-05-29')],[{symbol:'ABC',quantity:10}],'2026-10-13');
+ assert.equal(result.applied.length,1);
+ const holding=analyse(result.transactions,{ABC:400}).holdings[0];
+ assert.equal(holding.quantity,10);
+ assert.equal(holding.cost,4020);
+ assert.equal(holding.averageCost,402);
+ assert.equal(holding.lots.find(l=>l.id==='old').price,400);
+ assert.equal(holding.lots.find(l=>l.id==='new').price,410);
+ validateBackup({...fresh(),transactions:result.transactions});
+});
+
+test('existing legacy LICI bonus is not doubled by a later verification',()=>{
+ const transactions=[buy('LICI','2026-05-01',4,900,'old'),{
+  id:'bonus:LICI:2026-06-01',symbol:'LICI',date:'2026-06-01',side:'BUY',quantity:4,price:0,charges:0,chargesKnown:true,purpose:'core',corporateAction:'BONUS'
+ }];
+ const result=applyVerifiedCorporateActions(transactions,[event()]);
+ assert.equal(result.applied.length,0);
+ assert.equal(analyse(result.transactions).holdings[0].quantity,8);
 });
 
 test('complete replacement blocks duplicate source executions before saving',()=>{
  const row={...buy('TCS','2026-10-01',2,2000,'x'),tradeId:'fill-7',exchange:'NSE'};
  const result=prepareTradeReplacement([row,row],(()=>{let n=0;return()=>`new-${++n}`;})());
  assert.match(result.errors[0].message,/Duplicate source trade execution/);
+});
+
+test('verified actions resolve bonus-share sales before replacement validation',()=>{
+ const rows=[buy('LICI','2026-05-01',4,900,'b'),{...buy('LICI','2026-06-05',6,450,'s'),side:'SELL'}];
+ const plan=prepareTradeReplacement(rows,undefined,[event()]);
+ assert.equal(plan.errors.length,0);
+ assert.equal(plan.adjustments.length,1);
+ assert.equal(analyse(plan.transactions).holdings[0].quantity,2);
+});
+
+test('dated snapshots exclude later trades when confirming a bonus',()=>{
+ const rows=[buy('ABC','2026-01-01',10,100,'b'),{...buy('ABC','2026-07-01',5,60,'s'),side:'SELL'}];
+ const good=applyVerifiedCorporateActions(rows,[event('ABC')],[{symbol:'ABC',quantity:20}],'2026-06-01');
+ assert.equal(good.applied.length,1);
+ const bad=applyVerifiedCorporateActions(rows,[event('ABC')],[{symbol:'ABC',quantity:15}],'2026-06-01');
+ assert.equal(bad.applied.length,0);
+});
+
+test('multiple verified actions are staged together before snapshot reconciliation',()=>{
+ const rows=[buy('ABC','2026-01-01',10,100,'b')];
+ const events=[event('ABC','SPLIT',2,'2026-02-01'),event('ABC')];
+ const result=applyVerifiedCorporateActions(rows,events,[{symbol:'ABC',quantity:40}],'2026-06-01');
+ assert.equal(result.applied.length,2);
+ assert.equal(analyse(result.transactions).holdings[0].cost,1000);
+ assert.equal(analyse(result.transactions).holdings[0].quantity,40);
+});
+
+test('legacy diary preserves working allocations when cheapest-first would exhaust a selected lot',()=>{
+ const rows=[buy('ABC','2026-01-01',5,200,'dear'),buy('ABC','2026-01-02',5,100,'cheap'),
+  {...buy('ABC','2026-01-03',5,250,'s1'),side:'SELL'},
+  {...buy('ABC','2026-01-04',5,250,'s2'),side:'SELL',allocations:[{lotId:'cheap',quantity:5}]}];
+ const legacy={...fresh(),transactions:rows};delete legacy.lotPolicy;
+ const restored=validateBackup(legacy);
+ assert.equal(analyse(restored.transactions).errors.length,0);
+ assert.equal(restored.transactions[2].allocations[0].lotId,'dear');
+ assert.equal(restored.transactions[3].allocations[0].lotId,'cheap');
+ assert.equal(restored.lotPolicy,'lowest-v2');
 });
