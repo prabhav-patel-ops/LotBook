@@ -177,7 +177,7 @@ async function refreshMarket(force = false) {
   const due = symbols.filter(symbol => force ||
     ((!usableMarketQuote(marketQuotes[symbol]) || now - Date.parse(marketQuotes[symbol].fetchedAt) >= interval) &&
       now - (marketAttempts[symbol] || 0) >= interval));
-  if (!due.length) { refreshCorporateActions(false); return; }
+  if (!due.length) return;
   marketRefreshing = true;
   marketLastAttempt = now;
   marketMessage = '';
@@ -210,7 +210,6 @@ async function refreshMarket(force = false) {
   marketRefreshing = false;
   marketMessage = errors.length ? `${updated} updated · ${errors.length} issue(s): ${errors[0]}` : `${updated} price${updated === 1 ? '' : 's'} updated`;
   if (!$('#modal-root .dialog')) render();
-  refreshCorporateActions(false);
 }
 function scheduleMarketRefresh() {
   if (!state.onboarded || demo) return;
@@ -306,7 +305,7 @@ function welcome() {
 function marketPanel(a) {
   const held=a.holdings.filter(h=>h.quantity>0), linked=held.filter(h=>usableMarketQuote(marketQuotes[h.symbol])).length;
   const older=held.filter(h=>usableMarketQuote(marketQuotes[h.symbol])&&Date.now()-Date.parse(marketQuotes[h.symbol].marketAt||marketQuotes[h.symbol].fetchedAt)>86400000).length;
-  return `<section class="panel market-panel"><div class="market-toolbar"><div><h2>Market prices</h2><p>${linked} of ${held.length} quoted${older?' · '+older+' older than 24h':''} · Quotes may be delayed</p></div><button class="secondary" data-action="refreshquotes" ${marketRefreshing?'disabled':''}>${marketRefreshing?'Updating…':'Refresh prices'}</button></div>${marketMessage?`<p class="market-feedback" role="status">${esc(marketMessage)}</p>`:''}${actionMessage?`<p class="market-feedback" role="status">${esc(actionMessage)}</p>`:''}<details class="market-disclosure"><summary>Source &amp; freshness</summary><p>Prices are requested in batches and checked every ${marketIntervalMs(localStorage)/60000} minutes while open during market hours. Yahoo/Jina quotes are best-effort; manual prices fill gaps. Tap a stock for its source and timestamp.</p><p>Share adjustments are checked separately and require matching Yahoo and NSE records. Statements and share counts stay on this device.</p></details></section>`;
+  return `<section class="panel market-panel"><div class="market-toolbar"><div><h2>Market prices</h2><p>${linked} of ${held.length} quoted${older?' · '+older+' older than 24h':''} · Quotes may be delayed</p></div><button class="secondary" data-action="refreshquotes" ${marketRefreshing?'disabled':''}>${marketRefreshing?'Updating…':'Refresh prices'}</button></div>${marketMessage?`<p class="market-feedback" role="status">${esc(marketMessage)}</p>`:''}${actionMessage?`<p class="market-feedback" role="status">${esc(actionMessage)}</p>`:''}<details class="market-disclosure"><summary>Source &amp; freshness</summary><p>Prices are requested in rate-safe batches and checked every ${marketIntervalMs(localStorage)/60000} minutes while open during market hours. A failed batch is retried once; manual prices fill any remaining gaps. Tap a stock for its source and timestamp.</p><p>Share adjustments are checked separately after statement imports, not by the price button. Statements and share counts stay on this device.</p></details></section>`;
 }
 function stats(a) {
   const enteredValue = a.totals.unpriced && a.holdings.every(h => h.currentPrice === null) ? null : a.totals.currentValue;

@@ -29,16 +29,45 @@ test('keyless relay sends only ticker, validates response, and does not require 
 
 test('70 holdings refresh in three batched requests instead of one request per stock',async()=>{
  const holdings=Array.from({length:70},(_,index)=>({symbol:`FAST${index}`,name:`Fast Company ${index} Limited`}));
- const requested=[];
+ const requested=[];let active=0,maxActive=0;
  const result=await fetchYahooBatchQuotes(holdings,async url=>{
-   requested.push(url);
+   requested.push(url);active++;maxActive=Math.max(maxActive,active);
+   await new Promise(resolve=>setTimeout(resolve,5));active--;
    const encoded=url.split('symbols=')[1].split('%26')[0];
    const symbols=decodeURIComponent(encoded).split(',');
    const rows=symbols.map(symbol=>({symbol,response:[{meta:{symbol,currency:'INR',longName:`Fast Company ${Number(symbol.match(/\d+/)[0])} Limited`,regularMarketPrice:100,regularMarketTime:Date.now()/1000}}]}));
    return {ok:true,text:async()=>`Markdown Content:\n${JSON.stringify({spark:{result:rows,error:null}})}`};
  });
  assert.equal(requested.length,3);
+ assert.equal(maxActive,1);
  assert.equal(Object.keys(result.quotes).length,70);
+ assert.deepEqual(result.errors,[]);
+});
+
+test('batch refresh preserves ampersands inside tickers through the relay URL',async()=>{
+ let requested='';
+ const result=await fetchYahooBatchQuotes([{symbol:'M&M',name:'Mahindra and Mahindra Limited'}],async url=>{
+   requested=url;
+   const encoded=url.split('symbols=')[1].split('%26range')[0];
+   const symbol=decodeURIComponent(decodeURIComponent(encoded));
+   const row={symbol,response:[{meta:{symbol,currency:'INR',longName:'Mahindra and Mahindra Limited',regularMarketPrice:3000,regularMarketTime:Date.now()/1000}}]};
+   return {ok:true,text:async()=>`Markdown Content:\n${JSON.stringify({spark:{result:[row],error:null}})}`};
+ });
+ assert.match(requested,/M%2526M\.NS/);
+ assert.equal(result.quotes['M&M'].price,3000);
+ assert.deepEqual(result.errors,[]);
+});
+
+test('a rate-limited batch is retried once before falling back',async()=>{
+ let attempts=0;
+ const result=await fetchYahooBatchQuotes([{symbol:'TCS',name:'Tata Consultancy Services Limited'}],async url=>{
+   attempts++;
+   if(attempts===1) return {ok:false,status:429,text:async()=>''};
+   const row={symbol:'TCS.NS',response:[{meta:{symbol:'TCS.NS',currency:'INR',longName:'Tata Consultancy Services Limited',regularMarketPrice:3000,regularMarketTime:Date.now()/1000}}]};
+   return {ok:true,text:async()=>`Markdown Content:\n${JSON.stringify({spark:{result:[row],error:null}})}`};
+ });
+ assert.equal(attempts,2);
+ assert.equal(result.quotes.TCS.price,3000);
  assert.deepEqual(result.errors,[]);
 });
 
