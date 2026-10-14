@@ -7,7 +7,7 @@ import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js"
 import { csvCell, allocateLots, holdingReturnPercent } from "./ui-logic.js";
 import { selectDiaryEntries } from "./diary-view.js";
 import { prepareTradeReplacement, applyVerifiedCorporateActions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
-import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote, fetchYahooFallback, fetchVerifiedShareEvents } from "./market-data.js";
+import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote, fetchYahooBatchQuotes, fetchVerifiedShareEvents } from "./market-data.js";
 const $ = (s) => document.querySelector(s),
   esc = (s) =>
     String(s ?? "").replace(
@@ -126,7 +126,7 @@ async function refreshCorporateActions(force = false) {
   try { checked = JSON.parse(localStorage.getItem(ACTION_CHECK_KEY) || '{}'); }
   catch { checked = {}; }
   if (!checked || typeof checked !== 'object' || Array.isArray(checked)) checked = {};
-  const due = [...earliest].filter(([symbol]) => force || Date.now() - Number(checked[symbol] || 0) > 24 * 60 * 60 * 1000);
+  const due = [...earliest].filter(([symbol]) => force || Date.now() - Number(checked[symbol] || 0) > 7 * 24 * 60 * 60 * 1000);
   if (!due.length) return;
   actionRefreshing = true;
   actionMessage = 'Checking exchange-confirmed share changes…';
@@ -177,33 +177,40 @@ async function refreshMarket(force = false) {
   const due = symbols.filter(symbol => force ||
     ((!usableMarketQuote(marketQuotes[symbol]) || now - Date.parse(marketQuotes[symbol].fetchedAt) >= interval) &&
       now - (marketAttempts[symbol] || 0) >= interval));
-  if (!due.length) { await refreshCorporateActions(force); return; }
+  if (!due.length) { refreshCorporateActions(false); return; }
   marketRefreshing = true;
   marketLastAttempt = now;
   marketMessage = '';
   if (!$('#modal-root .dialog')) render();
   let updated = 0;
   const errors = [];
-  let keyFailed = false;
+  const holdingsBySymbol = new Map(live().holdings.map(holding => [holding.symbol, holding]));
+  const batchHoldings = [];
   for (const symbol of due) {
-    if (localStorage.getItem(MARKET_KEY) !== key) break;
     marketAttempts[symbol] = now;
-    if (!marketTicker(symbol)) { errors.push(`${symbol}: no matching market ticker`); continue; }
-    try {
-      if (key && !keyFailed) {
-        try { marketQuotes[symbol] = await fetchIndianQuote(symbol, key); }
-        catch(error) { keyFailed = true; marketQuotes[symbol] = await fetchYahooFallback(symbol, fetch, live().holdings.find(h=>h.symbol===symbol)?.name); }
-      } else marketQuotes[symbol] = await fetchYahooFallback(symbol, fetch, live().holdings.find(h=>h.symbol===symbol)?.name);
-      updated++;
-    } catch (error) { errors.push(`${symbol}: ${error.message}`); }
+    if (!marketTicker(symbol)) errors.push(`${symbol}: no matching market ticker`);
+    else batchHoldings.push(holdingsBySymbol.get(symbol) || {symbol,name:symbol});
   }
+  try {
+    const result = await fetchYahooBatchQuotes(batchHoldings);
+    Object.assign(marketQuotes, result.quotes);
+    updated += Object.keys(result.quotes).length;
+    const unresolved = result.errors.map(error => error.split(':')[0]);
+    if (key && unresolved.length && localStorage.getItem(MARKET_KEY) === key) {
+      const indianResults = await Promise.allSettled(unresolved.map(symbol => fetchIndianQuote(symbol, key)));
+      indianResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') { marketQuotes[unresolved[index]] = result.value; updated++; }
+        else errors.push(`${unresolved[index]}: ${result.reason?.message || 'no verified quote was returned'}`);
+      });
+    } else errors.push(...result.errors);
+  } catch (error) { errors.push(`Batch quotes: ${error.message}`); }
   if (localStorage.getItem(MARKET_KEY) !== key) { marketRefreshing = false; return; }
   try { localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(marketQuotes)); }
   catch { errors.push('Could not cache quotes on this device'); }
   marketRefreshing = false;
   marketMessage = errors.length ? `${updated} updated · ${errors.length} issue(s): ${errors[0]}` : `${updated} price${updated === 1 ? '' : 's'} updated`;
   if (!$('#modal-root .dialog')) render();
-  await refreshCorporateActions(force);
+  refreshCorporateActions(false);
 }
 function scheduleMarketRefresh() {
   if (!state.onboarded || demo) return;
@@ -299,7 +306,7 @@ function welcome() {
 function marketPanel(a) {
   const held=a.holdings.filter(h=>h.quantity>0), linked=held.filter(h=>usableMarketQuote(marketQuotes[h.symbol])).length;
   const older=held.filter(h=>usableMarketQuote(marketQuotes[h.symbol])&&Date.now()-Date.parse(marketQuotes[h.symbol].marketAt||marketQuotes[h.symbol].fetchedAt)>86400000).length;
-  return `<section class="panel market-panel"><div class="market-toolbar"><div><h2>Market prices</h2><p>${linked} of ${held.length} quoted${older?' · '+older+' older than 24h':''} · Quotes may be delayed</p></div><button class="secondary" data-action="refreshquotes" ${marketRefreshing||actionRefreshing?'disabled':''}>${marketRefreshing||actionRefreshing?'Updating…':'Refresh prices'}</button></div>${marketMessage?`<p class="market-feedback" role="status">${esc(marketMessage)}</p>`:''}${actionMessage?`<p class="market-feedback" role="status">${esc(actionMessage)}</p>`:''}<details class="market-disclosure"><summary>Source &amp; freshness</summary><p>Checks every ${marketIntervalMs(localStorage)/60000} minutes while open during market hours. Yahoo/Jina quotes are best-effort; manual prices fill gaps. Tap a stock for its source and timestamp.</p><p>Share adjustments require matching Yahoo and NSE records. Statements and share counts stay on this device.</p></details></section>`;
+  return `<section class="panel market-panel"><div class="market-toolbar"><div><h2>Market prices</h2><p>${linked} of ${held.length} quoted${older?' · '+older+' older than 24h':''} · Quotes may be delayed</p></div><button class="secondary" data-action="refreshquotes" ${marketRefreshing?'disabled':''}>${marketRefreshing?'Updating…':'Refresh prices'}</button></div>${marketMessage?`<p class="market-feedback" role="status">${esc(marketMessage)}</p>`:''}${actionMessage?`<p class="market-feedback" role="status">${esc(actionMessage)}</p>`:''}<details class="market-disclosure"><summary>Source &amp; freshness</summary><p>Prices are requested in batches and checked every ${marketIntervalMs(localStorage)/60000} minutes while open during market hours. Yahoo/Jina quotes are best-effort; manual prices fill gaps. Tap a stock for its source and timestamp.</p><p>Share adjustments are checked separately and require matching Yahoo and NSE records. Statements and share counts stay on this device.</p></details></section>`;
 }
 function stats(a) {
   const enteredValue = a.totals.unpriced && a.holdings.every(h => h.currentPrice === null) ? null : a.totals.currentValue;

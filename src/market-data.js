@@ -109,6 +109,77 @@ export async function fetchYahooFallback(symbol, fetcher = fetch, companyName = 
   throw lastError;
 }
 
+const YAHOO_BATCH_SIZE = 25;
+const chunks = (items, size = YAHOO_BATCH_SIZE) => {
+  const result = [];
+  for (let index = 0; index < items.length; index += size) result.push(items.slice(index, index + size));
+  return result;
+};
+async function fetchYahooSpark(entries, suffix, fetcher, fetchedAt) {
+  if (!entries.length) return {quotes:{}, missing:[]};
+  const symbols = entries.map(entry => `${entry.ticker}${suffix}`);
+  const target = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${encodeURIComponent(symbols.join(','))}%26range=1d%26interval=1d`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetcher(`https://r.jina.ai/${target}`, {
+      headers:{'X-No-Cache':'true',accept:'text/plain'},signal:controller.signal,cache:'no-store',
+    });
+    if (!response.ok) throw Error(`Free quote relay returned ${response.status}.`);
+    const text = await response.text();
+    const marker = text.indexOf('Markdown Content:');
+    const start = text.indexOf('{', marker);
+    if (marker < 0 || start < 0 || text.length > 500000) throw Error('Free quote relay returned an unexpected batch format.');
+    const payload = JSON.parse(text.slice(start).trim());
+    if (payload?.spark?.error) throw Error('Yahoo returned a batch quote error.');
+    const results = Array.isArray(payload?.spark?.result) ? payload.spark.result : [];
+    const bySymbol = new Map(results.map(result => [result?.symbol, result?.response?.[0]]));
+    const quotes = {}, missing = [];
+    for (const entry of entries) {
+      const yahooSymbol = `${entry.ticker}${suffix}`;
+      const result = bySymbol.get(yahooSymbol);
+      if (!result) { missing.push(entry); continue; }
+      if (suffix === '.BO' && entry.verifyBse && !companyIdentityMatches(entry.companyName, result?.meta?.longName || result?.meta?.shortName, entry.ticker)) {
+        missing.push(entry);
+        continue;
+      }
+      try { quotes[entry.symbol] = parseYahooQuote({chart:{result:[result],error:null}}, yahooSymbol, fetchedAt); }
+      catch { missing.push(entry); }
+    }
+    return {quotes, missing};
+  } finally { clearTimeout(timeout); }
+}
+
+export async function fetchYahooBatchQuotes(holdings, fetcher = fetch, fetchedAt = new Date().toISOString()) {
+  const entries = holdings.map(holding => {
+    const mapped = marketTicker(holding?.symbol);
+    return mapped ? {symbol:holding.symbol,companyName:holding.name || '',ticker:mapped.ticker,exchange:mapped.exchange,verifyBse:mapped.exchange !== 'BSE'} : null;
+  }).filter(Boolean);
+  const quotes = {}, unresolved = [];
+  const initialGroups = [
+    {suffix:'.NS', entries:entries.filter(entry => entry.exchange !== 'BSE')},
+    {suffix:'.BO', entries:entries.filter(entry => entry.exchange === 'BSE').map(entry => ({...entry,verifyBse:false}))},
+  ];
+  for (const group of initialGroups) {
+    const batches = chunks(group.entries);
+    const results = await Promise.allSettled(batches.map(batch => fetchYahooSpark(batch, group.suffix, fetcher, fetchedAt)));
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') { Object.assign(quotes, result.value.quotes); unresolved.push(...result.value.missing); }
+      else unresolved.push(...batches[index]);
+    });
+  }
+  const bseFallback = unresolved.filter(entry => entry.exchange !== 'BSE');
+  const fallbackBatches = chunks(bseFallback);
+  const fallbackResults = await Promise.allSettled(fallbackBatches.map(batch => fetchYahooSpark(batch, '.BO', fetcher, fetchedAt)));
+  const stillMissing = [];
+  fallbackResults.forEach((result, index) => {
+    if (result.status === 'fulfilled') { Object.assign(quotes, result.value.quotes); stillMissing.push(...result.value.missing); }
+    else stillMissing.push(...fallbackBatches[index]);
+  });
+  stillMissing.push(...unresolved.filter(entry => entry.exchange === 'BSE'));
+  return {quotes, errors:stillMissing.map(entry => `${entry.symbol}: no verified NSE or BSE quote was returned`)};
+}
+
 /** Yahoo reports bonuses as split-like factors; NSE identifies the actual action. */
 export function parseYahooShareEvents(payload, symbol, earliestDate) {
   const wanted = marketTicker(symbol);
