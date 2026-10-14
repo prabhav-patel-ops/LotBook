@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Lotbook — Flow &amp; first-version guide</title>
+    <title>Lotbook — App guide</title>
     <style>
       body {
         font:
@@ -104,7 +104,7 @@
   </head>
   <body>
     <main>
-      <div class="tag">LOTBOOK · PERSONAL MVP · 28 SEPTEMBER 2026</div>
+      <div class="tag">LOTBOOK · PERSONAL DIARY · UPDATED 14 OCTOBER 2026</div>
       <h1>Your shares.<br />Your trading story.</h1>
       <p>
         A private trading diary that separates core holdings from trading cycles
@@ -141,7 +141,8 @@
           comparison.
         </li>
         <li>
-          Transaction history, decision notes, monthly cycle summaries, and a
+          A newest-first Activity diary with stock search, trade and month
+          filters, separate decision notes, monthly cycle summaries, and a
           holdings snapshot reconciliation.
         </li>
         <li>
@@ -174,16 +175,13 @@
         and cost, using the note “opening balance”. Use matching stock
         identifiers across reports and manual entries.
       </p>
-      <h2>P&amp;L and tax reference</h2>
+      <h2>P&amp;L and Capital Gains references</h2>
       <p>
         The P&amp;L report can contain both realised and unrealised broker results.
         The Capital Gains statement preserves Groww-labelled short-term and
         long-term realised rows for each imported report period. These figures
-        are useful for review, but they do not replace the final capital-gains
-        computation in an ITR: eligibility, STT, other income, set-off and
-        carried-forward losses, surcharge, cess, residential status and any
-        grandfathering rules can matter. The Info tab links to the Income Tax
-        Department guidance and deliberately does not claim a final tax payable.
+        are useful for comparison only. Lotbook does not calculate tax or claim
+        a final amount payable. Use broker records and qualified tax guidance.
       </p>
       <p>
         Sources:
@@ -259,9 +257,11 @@
           available lots. Confirm only when the preview is correct.
         </li>
         <li>
-          Review Cycles for realised results and the Diary for the transaction
-          trail. Export a backup before changing devices or clearing browser
-          storage.
+          Review Cycles for sold-lot results. In Diary, use Activity for the
+          transaction trail, Notes for your decisions, and Rights trades for
+          separately retained entitlement records. Tap any trade to review its
+          costs and matched purchase lots. Export a backup before changing
+          devices or clearing browser storage.
         </li>
       </ol>
       <h2>Privacy and storage</h2>
@@ -295,10 +295,12 @@
       <h2>Scope and known limits</h2>
       <p>
         Equity long positions only. No broker connection, guaranteed real-time quotes, actual
-        order execution, dividend accounting, tax filing, corporate actions other than the verified LICI 1:1 bonus,
-        transfer reconstruction, mutual funds, F&amp;O, margin or short-selling
-        support. Imported sales initially use FIFO until specifically recorded
-        with a diary lot allocation. Past sales can be rematched only to lots
+        order execution, dividend accounting, tax filing, transfer reconstruction,
+        mutual funds, F&amp;O, margin or short-selling support. Bonus and split
+        adjustments are applied only when matching Yahoo and NSE records confirm
+        the type, date and ratio; no stock-specific action is hardcoded. Automatic
+        sales use the lowest-price available lots unless you choose specific lots.
+        Past sales can be rematched only to lots
         available before that sale; the whole diary is replayed before saving.
         Same-day history uses execution time when every trade has one, otherwise
         it preserves report order. Missing fees remain unknown, not zero. The
