@@ -1,4 +1,10 @@
-# LotBook 1.5.2 relay-safe price verification — 15 October 2026
+# LotBook 1.6.0 lowest-open-lot signal verification — 15 October 2026
+
+- Every quoted holding now compares its current market/manual price with the cheapest purchase lot that still has shares remaining. Closed lots cannot influence the signal.
+- Rows above that level are visibly green; rows at or below it are visibly red. Each row also gives an explicit `Above`, `Below`, or `At lowest buy` label and the rupee difference, while missing prices remain neutral.
+- Privacy mode masks every rupee amount inside the new comparison. All 171 automated tests and the production build passed.
+
+## LotBook 1.5.2 relay-safe price verification — 15 October 2026
 
 - Reproduced the reported production failure: the live relay returned HTTP 200 but rejected each 25-symbol nested URL, producing exactly `15 updated · 25 issue(s)` for a 40-stock portfolio.
 - Quote groups are now capped at 10 symbols. A live 40-stock NSE regression resolves 39 current symbols directly; the one retired ticker is discovered generically from its verified company identity and then quoted under its current exchange symbol.

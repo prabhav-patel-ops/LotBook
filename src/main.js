@@ -4,7 +4,7 @@ import { analyse, validateTransaction, orderedTransactions } from "./ledger.js";
 import { parseStatement, parseRows } from "./importer.js";
 import { parseReferenceStatement, summarizeReferenceEntries } from "./reference-reports.js";
 import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js";
-import { csvCell, allocateLots, holdingReturnPercent } from "./ui-logic.js";
+import { csvCell, allocateLots, holdingPriceSignal, holdingReturnPercent } from "./ui-logic.js";
 import { selectDiaryEntries } from "./diary-view.js";
 import { prepareTradeReplacement, applyVerifiedCorporateActions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
 import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote, fetchYahooBatchQuotes, fetchVerifiedShareEvents } from "./market-data.js";
@@ -87,6 +87,13 @@ const holdingMetricText = holding => {
   if (holdingMetric === 'pnl') return money(holding.unrealized);
   const value = holdingReturnPercent(holding.cost, holding.unrealized);
   return value === null ? '—' : state.privacyMode ? '••••' : `${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2, signDisplay: 'exceptZero' }).format(value)}%`;
+};
+const holdingPriceSignalText = holding => {
+  const signal = holdingPriceSignal(holding);
+  if (signal.status === 'unknown') return {status:'unknown', text:''};
+  if (signal.status === 'above') return {status:'above', text:`Above lowest buy · +${money(signal.difference)} vs ${money(signal.lowestPrice)}`};
+  if (signal.status === 'below') return {status:'not-above', text:`Below lowest buy · −${money(Math.abs(signal.difference))} vs ${money(signal.lowestPrice)}`};
+  return {status:'not-above', text:`At lowest buy · ${money(signal.lowestPrice)}`};
 };
 const quoteSummary = symbol => {
   const quote = marketQuotes[symbol];
@@ -327,7 +334,10 @@ function holdings(a) {
         h.name?.toLowerCase().includes(query.toLowerCase())),
   );
   const rows = list.length
-    ? `<div class="holdings-head"><span>Stock / price</span><span>Average / cost</span><span>Value / quote</span><span>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Unrealised return'}</span></div>${list.map((h) => `<button class="holding-row" data-stock="${esc(h.symbol)}"><div class="stock-main"><span class="stock-icon">${esc(h.symbol.slice(0, 2))}</span><div><b>${esc(h.name || h.symbol)}</b><small>${esc(h.symbol)} · ${num(h.quantity)} shares</small><small class="stock-price">Price ${money(h.currentPrice)} / share</small><small class="stock-quote">${esc(quoteSummary(h.symbol))}</small>${soldResults.has(h.symbol)?`<small class="stock-sold">Sold shares P&amp;L ${money(soldResults.get(h.symbol))}</small>`:''}</div></div><div><b>${money(h.averageCost)}</b><small>${money(h.cost)}</small></div><div><b>${money(h.currentValue)}</b><small>Value at available price</small></div><div><b class="${h.unrealized === null ? "" : tone(h.unrealized)}">${holdingMetricText(h)}</b><small>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Return on remaining cost'}</small><small>View lots →</small></div></button>`).join("")}`
+    ? `<div class="holdings-head"><span>Stock / price</span><span>Average / cost</span><span>Value / quote</span><span>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Unrealised return'}</span></div>${list.map((h) => {
+      const priceSignal = holdingPriceSignalText(h);
+      return `<button class="holding-row" data-stock="${esc(h.symbol)}" data-price-position="${priceSignal.status}"><div class="stock-main"><span class="stock-icon">${esc(h.symbol.slice(0, 2))}</span><div><b>${esc(h.name || h.symbol)}</b><small>${esc(h.symbol)} · ${num(h.quantity)} shares</small><small class="stock-price">Price ${money(h.currentPrice)} / share</small><small class="stock-quote">${esc(quoteSummary(h.symbol))}</small>${priceSignal.text?`<small class="stock-lot-signal">${priceSignal.text}</small>`:''}${soldResults.has(h.symbol)?`<small class="stock-sold">Sold shares P&amp;L ${money(soldResults.get(h.symbol))}</small>`:''}</div></div><div><b>${money(h.averageCost)}</b><small>${money(h.cost)}</small></div><div><b>${money(h.currentValue)}</b><small>Value at available price</small></div><div><b class="${h.unrealized === null ? "" : tone(h.unrealized)}">${holdingMetricText(h)}</b><small>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Return on remaining cost'}</small><small>View lots →</small></div></button>`;
+    }).join("")}`
     : `<div class="empty"><span class="empty-icon">◫</span><h3>${query ? "No matching stocks" : "Your portfolio starts here"}</h3><p>Import your Groww order history, or add your first purchase.<br>Every purchase becomes a lot you can follow.</p><button data-action="buy">Add a purchase</button><button class="secondary" data-view="import">Import statements</button></div>`;
   return `${stats(a)}${marketPanel(a)}<section class="panel"><div class="panel-title portfolio-title"><div><h2>Portfolio</h2><span>${a.holdings.filter((h) => h.quantity > 0).length} holdings · Tap a stock to see lots</span></div><div class="portfolio-controls"><input class="search" id="search" value="${esc(query)}" placeholder="Search your stocks" aria-label="Search stocks"><div class="metric-switch" role="group" aria-label="Holding result display"><button data-action="holdingmetric" data-metric="pnl" aria-pressed="${holdingMetric === 'pnl'}" class="${holdingMetric === 'pnl' ? 'active' : ''}">P&L</button><button data-action="holdingmetric" data-metric="returns" aria-pressed="${holdingMetric === 'returns'}" class="${holdingMetric === 'returns' ? 'active' : ''}">Returns %</button></div></div></div>${rows}</section>${closedSymbols.length?`<section class="panel mini"><h2>Fully sold stocks</h2><p>Diary result after recorded costs. Automatic sales use the lowest-price lots; custom matches are retained.</p>${closedSymbols.map(([symbol,net])=>`<div class="kv"><span><b>${esc(symbol)}</b><small>No shares remaining</small></span><b class="${tone(net)}">${money(net)}</b></div>`).join('')}</section>`:''}${profitExplanation(a)}${reconciliation(a)}<div class="two-col"><section class="panel mini"><div class="panel-title"><h2>Cash balance</h2><button class="text-button" data-action="cash">Update</button></div><strong class="large">${money(state.cash)}</strong><p>Enter the balance shown in Groww manually. It is not reconstructed from equity trades.</p></section><section class="panel mini"><div class="panel-title"><h2>Your diary, your device</h2><span>↗</span></div><p>Export a backup regularly. Browser storage can be cleared or lost when you change devices.</p><button class="secondary" data-action="export">Export my diary</button></section></div>`;
 }
