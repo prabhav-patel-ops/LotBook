@@ -178,6 +178,12 @@ export function analyse(transactions, prices = {}, policy = 'lowest') {
         finite(lots.filter(lot => lot.symbol === t.symbol).reduce((sum, lot) => finite(sum + lot.remaining), 0) + t.quantity);
         finite(lots.reduce((sum, lot) => finite(sum + lot.remaining * lot.price + lot.charges * (lot.remaining / lot.quantity)), 0) + t.quantity * t.price + t.charges);
         const lot = { ...t, remaining: t.quantity };
+        if (t.corporateAction === 'BONUS') {
+          const eligible = lots.filter(existing => existing.symbol === t.symbol && existing.remaining > 0);
+          const held = eligible.reduce((sum, existing) => finite(sum + existing.remaining), 0);
+          if (!held) throw Error(`No held ${t.symbol} shares existed before the bonus.`);
+          lot.adjustmentFactor = finite((held + t.quantity) / held);
+        }
         lots.push(lot);
         fifoLots.push({ ...lot });
       } else if (t.side === 'SPLIT') {
@@ -238,7 +244,7 @@ export function analyse(transactions, prices = {}, policy = 'lowest') {
       currentValue: value === null ? null : money(value), unrealized: value === null ? null : money(value - cost),
       coreQuantity: quantityOut(group.filter(l => l.purpose === 'core').reduce((sum, l) => sum + l.remaining, 0)),
       tradingQuantity: quantityOut(group.filter(l => l.purpose === 'trading').reduce((sum, l) => sum + l.remaining, 0)),
-      lots: lots.filter(l => l.symbol === symbol).map(l => ({ id: l.id, date: l.date, purpose: l.purpose, quantity: quantityOut(l.quantity), remaining: quantityOut(l.remaining), price: l.price, chargesRemaining: money(l.charges * (l.remaining / l.quantity)) })),
+      lots: lots.filter(l => l.symbol === symbol).map(l => ({ id: l.id, date: l.date, purpose: l.purpose, quantity: quantityOut(l.quantity), remaining: quantityOut(l.remaining), price: l.price, chargesRemaining: money(l.charges * (l.remaining / l.quantity)), ...(l.corporateAction ? {corporateAction:l.corporateAction, adjustmentFactor:l.adjustmentFactor} : {}) })),
     };
   });
   const months = new Map();
@@ -254,9 +260,13 @@ export function analyse(transactions, prices = {}, policy = 'lowest') {
     .sort((a, b) => a.month.localeCompare(b.month))
     .map(m => ({ month: m.month, net: money(m.net), gross: money(m.gross), charges: money(m.charges) }));
   const cycles = rawCycles.map(c => ({ ...c, quantity: quantityOut(c.quantity), gross: money(c.gross), charges: money(c.charges), net: money(c.net) }));
+  // Broker holding averages use FIFO. Keep this separate from LotBook's selected-lot
+  // acquisition cost, and exclude buy charges because broker average-price displays
+  // are based on executed purchase prices rather than the diary's recorded costs.
+  const fifoInvested = fifoLots.reduce((sum, lot) => finite(sum + lot.remaining * lot.price), 0);
   return {
     holdings, cycles, monthlyResults, errors,
-    totals: { invested: money(invested), currentValue: money(currentValue), unrealized: money(unrealized),
+    totals: { invested: money(invested), fifoInvested: money(fifoInvested), currentValue: money(currentValue), unrealized: money(unrealized),
       realizedGross: money(realizedGross), charges: money(charges), realizedNet: money(realizedNet), fifoNet: money(fifoNet),
       cycles: cycles.length, wins: cycles.filter(c => c.net > 0).length, losses: cycles.filter(c => c.net < 0).length, unpriced, unknownCharges },
   };

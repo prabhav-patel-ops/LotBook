@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {analyse} from '../src/ledger.js';
+import {holdingPriceSignal} from '../src/ui-logic.js';
 import {prepareTradeReplacement, applyVerifiedCorporateActions, reconcileHoldings} from '../src/import-workflow.js';
 import {fresh, validateBackup} from '../src/storage.js';
 
@@ -43,9 +44,47 @@ test('verified LICI bonus repairs existing saved holdings and cost without a re-
  assert.equal(holding.cost,3600);
  assert.equal(holding.averageCost,450);
  assert.equal(holding.unrealized,0);
+ assert.equal(holding.lots.length,2);
+ assert.equal(holding.lots.find(lot=>lot.id==='lic-buy').price,900);
+ assert.equal(holdingPriceSignal(holding).lowestPrice,450);
  assert.equal(reconcileHoldings(result.transactions,snapshots)[0].difference,0);
  validateBackup({...fresh(),transactions:result.transactions});
  assert.equal(applyVerifiedCorporateActions(result.transactions,[event()],snapshots,'2026-10-13').applied.length,0);
+});
+
+test('bonus and split adjust the lowest open buy before the price signal',()=>{
+ const bonusTransactions=[buy('LICI','2026-05-01',4,808,'lic-buy'),{
+  id:'bonus:LICI:2026-05-29',symbol:'LICI',date:'2026-05-29',side:'BUY',quantity:4,price:0,
+  charges:0,chargesKnown:true,purpose:'core',corporateAction:'BONUS'
+ }];
+ const afterBonus=analyse(bonusTransactions,{LICI:500}).holdings[0];
+ assert.equal(afterBonus.quantity,8);
+ assert.equal(afterBonus.cost,3232);
+ assert.equal(afterBonus.lots.length,2);
+ assert.equal(afterBonus.lots.find(lot=>lot.id==='lic-buy').price,808);
+ assert.deepEqual(holdingPriceSignal(afterBonus),{status:'above',lowestPrice:404,difference:96});
+
+ const splitResult=applyVerifiedCorporateActions(
+  [buy('ABC','2026-01-01',2,808,'abc-buy')],
+  [event('ABC','SPLIT',2,'2026-05-29')],
+ );
+ const afterSplit=analyse(splitResult.transactions,{ABC:500}).holdings[0];
+ assert.equal(afterSplit.lots[0].price,404);
+ assert.deepEqual(holdingPriceSignal(afterSplit),{status:'above',lowestPrice:404,difference:96});
+});
+
+test('bonus comparison adjusts only purchases eligible on the action date',()=>{
+ const transactions=[
+  buy('ABC','2026-01-01',4,808,'buy'),
+  {...buy('ABC','2026-02-01',2,900,'sale'),side:'SELL'},
+  {id:'bonus',symbol:'ABC',date:'2026-05-29',side:'BUY',quantity:2,price:0,charges:0,chargesKnown:true,purpose:'core',corporateAction:'BONUS'},
+  buy('ABC','2026-06-01',2,500,'after'),
+ ];
+ const holding=analyse(transactions,{ABC:450}).holdings[0];
+ assert.equal(holding.quantity,6);
+ assert.equal(holding.lots.find(lot=>lot.id==='buy').price,808);
+ assert.equal(holding.lots.find(lot=>lot.id==='after').price,500);
+ assert.equal(holdingPriceSignal(holding).lowestPrice,404);
 });
 
 test('events do not invent shares for post-ex-date buyers or a different symbol',()=>{

@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { holdingPriceSignal, holdingReturnPercent } from '../src/ui-logic.js';
+import { growwInvestedSummary, holdingPriceSignal, holdingReturnPercent } from '../src/ui-logic.js';
+
+test('Groww invested uses a current quantity-matching holdings statement', () => {
+  assert.deepEqual(growwInvestedSummary({
+    holdings: [{symbol: 'ABC', quantity: 10}, {symbol: 'XYZ', quantity: 2}],
+    fifoInvested: 999,
+    snapshots: [{symbol: 'ABC', quantity: 10, averageCost: 101.25}, {symbol: 'XYZ', quantity: 2, averageCost: 500}],
+    snapshotDate: '2026-10-15',
+    latestTransactionDate: '2026-10-14',
+  }), {value: 2012.5, source: 'statement', asOf: '2026-10-15'});
+});
+
+test('Groww invested falls back to FIFO for stale, incomplete or mismatched statements', () => {
+  const common={holdings:[{symbol:'ABC',quantity:10}],fifoInvested:975,snapshots:[{symbol:'ABC',quantity:10,averageCost:101}],snapshotDate:'2026-10-10'};
+  assert.deepEqual(growwInvestedSummary({...common,latestTransactionDate:'2026-10-11'}), {value:975,source:'fifo',asOf:null});
+  assert.deepEqual(growwInvestedSummary({...common,snapshots:[{symbol:'ABC',quantity:9,averageCost:101}],latestTransactionDate:'2026-10-10'}), {value:975,source:'fifo',asOf:null});
+  assert.deepEqual(growwInvestedSummary({...common,snapshots:[{symbol:'ABC',quantity:10,averageCost:null}],latestTransactionDate:'2026-10-10'}), {value:975,source:'fifo',asOf:null});
+});
 
 test('holding return uses the remaining lots cost and unrealised result', () => {
   assert.equal(holdingReturnPercent(1000, 250), 25);
