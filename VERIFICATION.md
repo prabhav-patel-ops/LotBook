@@ -1,4 +1,17 @@
-# LotBook 1.6.0 lowest-open-lot signal verification — 15 October 2026
+# LotBook 1.6.2 broker-total and tax-boundary verification — 15 October 2026
+
+- The Holdings headline now prefers the imported Groww quantity × average-cost total only when every current quantity matches and no transaction is newer than that statement. Otherwise it says `FIFO estimate` instead of presenting a selected-lot diary cost as Groww's number.
+- LotBook's lowest-price-first remaining cost is retained separately under `Understand your profit figures`. The independent FIFO replay excludes diary buy charges from the broker-style invested estimate.
+- The Info tab explains that a custom lot match does not alter taxable FIFO and that selling below the displayed average does not by itself establish a capital loss. Broker Capital Gains remains the filing reference; no exact PAT is claimed.
+- All 175 automated tests and the production build passed. New tests cover exact statement totals and stale, incomplete, missing-average and quantity-mismatch fallbacks.
+
+## LotBook 1.6.1 corporate-action cost-basis verification — 15 October 2026
+
+- The red/green comparison now dilutes each eligible purchase price by verified bonus factors. A ₹808 purchase followed by a 1:1 bonus is therefore compared at ₹404, and the zero-cost bonus record is excluded from the threshold.
+- Verified splits continue to scale pre-action lot prices, while purchases made after a bonus or split retain their original price. Original transactions and existing saved lot selections remain unchanged for backward compatibility.
+- Tests cover bonus, split, post-action purchases and closed-lot exclusion. All 173 automated tests and the production build passed.
+
+## LotBook 1.6.0 lowest-open-lot signal verification — 15 October 2026
 
 - Every quoted holding now compares its current market/manual price with the cheapest purchase lot that still has shares remaining. Closed lots cannot influence the signal.
 - Rows above that level are visibly green; rows at or below it are visibly red. Each row also gives an explicit `Above`, `Below`, or `At lowest buy` label and the rupee difference, while missing prices remain neutral.

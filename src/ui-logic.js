@@ -27,11 +27,43 @@ export function holdingReturnPercent(cost, unrealized) {
   return (unrealized / cost) * 100;
 }
 
+/**
+ * Prefer a current, quantity-matching broker holdings snapshot for the number
+ * Groww calls invested. Fall back to the independently replayed FIFO cost.
+ * A snapshot is not used after a later trade because unchanged net quantity can
+ * hide a sell-and-rebuy whose broker average has changed.
+ */
+export function growwInvestedSummary({holdings = [], fifoInvested = 0, snapshots = [], snapshotDate = '', latestTransactionDate = ''} = {}) {
+  const held = holdings.filter(holding => Number(holding.quantity) > 0);
+  const reported = new Map(snapshots.filter(row => Number(row.quantity) > 0).map(row => [row.symbol, row]));
+  const sameQuantity = held.length === reported.size && held.every(holding => {
+    const row = reported.get(holding.symbol);
+    return row && Math.abs(Number(row.quantity) - Number(holding.quantity)) <= 1e-8;
+  });
+  const averagesAvailable = sameQuantity && held.every(holding => {
+    const average = reported.get(holding.symbol)?.averageCost;
+    return average !== null && average !== undefined && average !== '' && Number.isFinite(Number(average));
+  });
+  const currentEnough = Boolean(snapshotDate) && (!latestTransactionDate || latestTransactionDate <= snapshotDate);
+  if (averagesAvailable && currentEnough) {
+    const value = held.reduce((sum, holding) => sum + Number(holding.quantity) * Number(reported.get(holding.symbol).averageCost), 0);
+    return {value: Math.round((value + Number.EPSILON * Math.abs(value)) * 100) / 100, source: 'statement', asOf: snapshotDate};
+  }
+  return {value: Number.isFinite(Number(fifoInvested)) ? Number(fifoInvested) : 0, source: 'fifo', asOf: null};
+}
+
 /** Compare a quoted holding price with the cheapest purchase lot that is still open. */
 export function holdingPriceSignal(holding) {
-  const openLotPrices = (holding?.lots || [])
-    .filter(lot => Number(lot?.remaining) > 0 && Number.isFinite(Number(lot?.price)) && Number(lot.price) >= 0)
-    .map(lot => Number(lot.price));
+  const lots = holding?.lots || [];
+  const bonuses = lots.filter(lot => lot?.corporateAction === 'BONUS' && Number(lot?.adjustmentFactor) > 1);
+  const openLotPrices = lots
+    .filter(lot => !lot?.corporateAction && Number(lot?.remaining) > 0 && Number.isFinite(Number(lot?.price)) && Number(lot.price) >= 0)
+    .map(lot => {
+      const factor = bonuses
+        .filter(bonus => String(lot.date || '') < String(bonus.date || ''))
+        .reduce((product, bonus) => product * Number(bonus.adjustmentFactor), 1);
+      return Number(lot.price) / factor;
+    });
   const lowestPrice = openLotPrices.length ? Math.min(...openLotPrices) : null;
   const currentPrice = Number(holding?.currentPrice);
   if (lowestPrice === null || holding?.currentPrice === null || holding?.currentPrice === undefined || !Number.isFinite(currentPrice)) {

@@ -14,6 +14,7 @@ test('default fills lowest-price lot, independent broker FIFO differs, wealth ag
   assert.equal(fifo.totals.realizedNet, 200);
   assert.equal(chosen.holdings[0].lots[0].id, '1300');
   assert.equal(chosen.holdings[0].cost, 13000);
+  assert.equal(chosen.totals.fifoInvested, 12500);
   assert.equal(chosen.totals.realizedNet + chosen.totals.unrealized, fifo.totals.realizedNet + fifo.totals.unrealized);
   assert.equal(chosen.totals.currentValue, fifo.totals.currentValue);
   assert.equal(chosen.cycles[0].purpose, 'trading');
@@ -172,7 +173,7 @@ test('rounding retains fee precision until reporting; no fees are invented', () 
 });
 
 test('empty input returns a complete zero summary', () => {
-  assert.deepEqual(analyse([]), { holdings: [], cycles: [], monthlyResults: [], errors: [], totals: { invested: 0, currentValue: 0, unrealized: 0, realizedGross: 0, charges: 0, realizedNet: 0, fifoNet: 0, cycles: 0, wins: 0, losses: 0, unpriced: 0, unknownCharges: 0 } });
+  assert.deepEqual(analyse([]), { holdings: [], cycles: [], monthlyResults: [], errors: [], totals: { invested: 0, fifoInvested: 0, currentValue: 0, unrealized: 0, realizedGross: 0, charges: 0, realizedNet: 0, fifoNet: 0, cycles: 0, wins: 0, losses: 0, unpriced: 0, unknownCharges: 0 } });
 });
 
 test('monthly results sum unrounded cycles to preserve a cent of buy fees across three closes', () => {
