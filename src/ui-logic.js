@@ -26,3 +26,21 @@ export function holdingReturnPercent(cost, unrealized) {
   if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(unrealized)) return null;
   return (unrealized / cost) * 100;
 }
+
+/** Compare a quoted holding price with the cheapest purchase lot that is still open. */
+export function holdingPriceSignal(holding) {
+  const openLotPrices = (holding?.lots || [])
+    .filter(lot => Number(lot?.remaining) > 0 && Number.isFinite(Number(lot?.price)) && Number(lot.price) >= 0)
+    .map(lot => Number(lot.price));
+  const lowestPrice = openLotPrices.length ? Math.min(...openLotPrices) : null;
+  const currentPrice = Number(holding?.currentPrice);
+  if (lowestPrice === null || holding?.currentPrice === null || holding?.currentPrice === undefined || !Number.isFinite(currentPrice)) {
+    return { status: 'unknown', lowestPrice, difference: null };
+  }
+  const difference = currentPrice - lowestPrice;
+  return {
+    status: difference > 0 ? 'above' : difference < 0 ? 'below' : 'at',
+    lowestPrice,
+    difference,
+  };
+}

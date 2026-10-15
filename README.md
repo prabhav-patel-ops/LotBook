@@ -6,12 +6,12 @@ A local-only personal equity trading diary. Track purchase lots, core holdings, 
 
 **User flow and privacy:** [Guide](public/guide.html)
 
-## Everyday use · v1.5.2
+## Everyday use · v1.6.0
 
 - **Diary → Activity:** newest-first date groups, search by stock name/symbol, type/month filters, and Show more. Tap any trade for costs, matched purchase lots, and record details. Sales show sold-lot P&L; purchases show gross purchase value with distinct labels.
 - **Diary → Notes:** keep decision notes separately from transactions. Unsaved text survives in-app tab changes; Save note is required to keep it after a reload.
 - **Diary → Rights trades:** separate entitlement records, when present. No acquisition cost or profit is invented.
-- **Holdings:** three summary figures, compact price controls, and visible sold-share results. Tap a stock for quote source/time and purchase lots; expand the profit explanation for the FIFO comparison.
+- **Holdings:** each quoted stock is green when its current price is above the cheapest purchase lot still held, and red when it is at or below that price. The row also states the exact difference and lowest-buy price, so the signal never relies on colour alone. Tap a stock for quote source/time and purchase lots; expand the profit explanation for the FIFO comparison.
 - **Statements:** order history first, holdings second; optional broker reports are grouped below. Replacement always requires review and confirmation.
 - **Settings:** backups and updates first; quote settings, profile, installation, privacy and clearing data are expandable sections.
 

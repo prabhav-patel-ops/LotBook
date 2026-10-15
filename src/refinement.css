@@ -52,6 +52,13 @@ small, .fine { color:#65766d; line-height:1.6; }
 .holding-row .stock-price { font-size:12px; }
 .holding-row .stock-quote { font-size:10px; color:#6e7d73; }
 .holding-row .stock-sold { display:inline-block; background:#edf5ef; border-radius:5px; padding:4px 7px; font-size:11px; }
+.holding-row[data-price-position="above"] { background:linear-gradient(90deg,#eff9f3 0,#fff 48%); box-shadow:inset 4px 0 0 #29966e; }
+.holding-row[data-price-position="not-above"] { background:linear-gradient(90deg,#fff1ef 0,#fff 48%); box-shadow:inset 4px 0 0 #cf6658; }
+.holding-row[data-price-position="above"]:hover { background:linear-gradient(90deg,#e8f7ee 0,#f9fcfa 48%); }
+.holding-row[data-price-position="not-above"]:hover { background:linear-gradient(90deg,#feeae7 0,#fffafa 48%); }
+.holding-row .stock-lot-signal { display:inline-flex; width:fit-content; max-width:100%; margin-top:7px; padding:4px 8px; border-radius:999px; font-size:10px; font-weight:700; line-height:1.35; overflow-wrap:anywhere; }
+.holding-row[data-price-position="above"] .stock-lot-signal { color:#126846; background:#dff3e8; }
+.holding-row[data-price-position="not-above"] .stock-lot-signal { color:#9b4338; background:#fbe0dc; }
 .stock-icon { background:#f1f4ee; flex-shrink:0; }
 .portfolio-controls .search { margin:0; }
 .metric-switch button { min-height:36px; }
