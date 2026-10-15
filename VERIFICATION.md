@@ -1,4 +1,10 @@
-# LotBook 1.5.1 rate-safe price verification — 15 October 2026
+# LotBook 1.5.2 relay-safe price verification — 15 October 2026
+
+- Reproduced the reported production failure: the live relay returned HTTP 200 but rejected each 25-symbol nested URL, producing exactly `15 updated · 25 issue(s)` for a 40-stock portfolio.
+- Quote groups are now capped at 10 symbols. A live 40-stock NSE regression resolves 39 current symbols directly; the one retired ticker is discovered generically from its verified company identity and then quoted under its current exchange symbol.
+- 168 automated tests passed, including guards for the 10-symbol relay limit and generic renamed-ticker discovery without a hardcoded map.
+
+## LotBook 1.5.1 rate-safe price verification — 15 October 2026
 
 - 166 automated tests passed. A synthetic 70-stock portfolio refreshes in three sequential Yahoo/Jina batch requests rather than 70–140 per-stock requests; observed request concurrency is exactly one.
 - Mixed NSE and BSE coverage passed: direct BSE symbols and verified NSE-to-BSE fallbacks resolve inside the batch pipeline without ticker-specific rules.

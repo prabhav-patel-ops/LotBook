@@ -6,7 +6,7 @@ A local-only personal equity trading diary. Track purchase lots, core holdings, 
 
 **User flow and privacy:** [Guide](public/guide.html)
 
-## Everyday use · v1.5.1
+## Everyday use · v1.5.2
 
 - **Diary → Activity:** newest-first date groups, search by stock name/symbol, type/month filters, and Show more. Tap any trade for costs, matched purchase lots, and record details. Sales show sold-lot P&L; purchases show gross purchase value with distinct labels.
 - **Diary → Notes:** keep decision notes separately from transactions. Unsaved text survives in-app tab changes; Save note is required to keep it after a reload.
@@ -23,9 +23,11 @@ This does not execute orders or change a broker's FIFO or tax records. Total eco
 
 ## Free market-price connection
 
-In **Holdings → Refresh prices**, Lotbook can request keyless Yahoo Finance quotes through Jina Reader as a temporary, unofficial personal-use fallback. An optional [IndianAPI stock key](https://indianapi.in/indian-stock-market) can still be stored in Settings; if that service fails, the fallback is tried. Only requested tickers are sent to quote providers, not names, quantities, transactions, statements or notes. The relay and quote provider can see the requested tickers. Never put a provider key in GitHub or chat. The key and quote cache stay on this device and are excluded from JSON diary backups.
+In **Holdings → Refresh prices**, Lotbook can request keyless Yahoo Finance quotes through Jina Reader as a temporary, unofficial personal-use fallback. An optional [IndianAPI stock key](https://indianapi.in/indian-stock-market) can still be stored in Settings; if that service fails, the fallback is tried. Requested tickers are sent to quote providers. Only when a ticker has been renamed and both exchange forms fail, its public company name is sent to Yahoo Search to discover a current symbol; quantities, transactions, statements and notes are never sent. Never put a provider key in GitHub or chat. The key and quote cache stay on this device and are excluded from JSON diary backups.
 
-Quotes refresh when the app opens, and while visible during NSE hours at the chosen 15/30/60/120-minute interval (60 minutes by default). A Refresh prices button requests updates on demand. Yahoo symbols are requested in validated, sequential batches of up to 25, and a throttled batch is retried once. A 60–70 stock portfolio therefore normally needs only three rate-safe NSE requests plus any required BSE fallback batches instead of one or two requests per stock. Symbols containing punctuation such as `M&M` are safely relayed. The app does not refresh when closed. Provider limits, unsupported tickers and outages leave the most recent usable quote or a manually entered price; quotes older than seven days are excluded from valuation. Each holding shows its source and age; Yahoo's reported market timestamp is checked, while IndianAPI's fetch time is not a verified trade time. The relay has no uptime guarantee. Verify material values against Groww before acting. Cash remains manual.
+Quotes refresh when the app opens, and while visible during NSE hours at the chosen 15/30/60/120-minute interval (60 minutes by default). A Refresh prices button requests updates on demand. Yahoo symbols are requested in validated, sequential batches of up to 10, keeping the nested relay URL below its rejection threshold; a failed batch is retried once. A 60–70 stock portfolio therefore normally needs six or seven rate-safe NSE requests plus any required BSE fallback batches instead of one or two requests per stock. Symbols containing punctuation such as `M&M` are safely relayed. The app does not refresh when closed. Provider limits, unsupported tickers and outages leave the most recent usable quote or a manually entered price; quotes older than seven days are excluded from valuation. Each holding shows its source and age; Yahoo's reported market timestamp is checked, while IndianAPI's fetch time is not a verified trade time. The relay has no uptime guarantee. Verify material values against Groww before acting. Cash remains manual.
+
+If a broker statement still uses an old ticker after a rename or demerger, Lotbook searches by company name and accepts the replacement only when the company identity, Indian exchange, INR currency and returned quote all verify. This is generic discovery rather than a hardcoded ticker or corporate-action table.
 
 ## Development
 
