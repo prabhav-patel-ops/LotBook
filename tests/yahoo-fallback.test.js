@@ -27,7 +27,7 @@ test('keyless relay sends only ticker, validates response, and does not require 
  assert.equal(fetched[0].url.includes('apiKey'),false);
 });
 
-test('70 holdings refresh in three batched requests instead of one request per stock',async()=>{
+test('70 holdings refresh in seven relay-safe requests instead of one request per stock',async()=>{
  const holdings=Array.from({length:70},(_,index)=>({symbol:`FAST${index}`,name:`Fast Company ${index} Limited`}));
  const requested=[];let active=0,maxActive=0;
  const result=await fetchYahooBatchQuotes(holdings,async url=>{
@@ -38,9 +38,25 @@ test('70 holdings refresh in three batched requests instead of one request per s
    const rows=symbols.map(symbol=>({symbol,response:[{meta:{symbol,currency:'INR',longName:`Fast Company ${Number(symbol.match(/\d+/)[0])} Limited`,regularMarketPrice:100,regularMarketTime:Date.now()/1000}}]}));
    return {ok:true,text:async()=>`Markdown Content:\n${JSON.stringify({spark:{result:rows,error:null}})}`};
  });
- assert.equal(requested.length,3);
+ assert.equal(requested.length,7);
  assert.equal(maxActive,1);
  assert.equal(Object.keys(result.quotes).length,70);
+ assert.deepEqual(result.errors,[]);
+});
+
+test('a 40-stock portfolio never sends a relay-breaking batch above ten symbols',async()=>{
+ const holdings=Array.from({length:40},(_,index)=>({symbol:`SAFE${index}`,name:`Safe Company ${index} Limited`}));
+ let requests=0;
+ const result=await fetchYahooBatchQuotes(holdings,async url=>{
+   requests++;
+   const encoded=url.split('symbols=')[1].split('%26range')[0];
+   const symbols=decodeURIComponent(encoded).split(',');
+   if(symbols.length>10) return {ok:true,text:async()=>`Markdown Content:\nRelay refused an oversized nested URL`};
+   const rows=symbols.map(symbol=>({symbol,response:[{meta:{symbol,currency:'INR',regularMarketPrice:100,regularMarketTime:Date.now()/1000}}]}));
+   return {ok:true,text:async()=>`Markdown Content:\n${JSON.stringify({spark:{result:rows,error:null}})}`};
+ });
+ assert.equal(requests,4);
+ assert.equal(Object.keys(result.quotes).length,40);
  assert.deepEqual(result.errors,[]);
 });
 
@@ -68,6 +84,30 @@ test('a rate-limited batch is retried once before falling back',async()=>{
  });
  assert.equal(attempts,2);
  assert.equal(result.quotes.TCS.price,3000);
+ assert.deepEqual(result.errors,[]);
+});
+
+test('a renamed exchange ticker is discovered from verified company identity without a hardcoded map',async()=>{
+ const requests=[];
+ const result=await fetchYahooBatchQuotes([{symbol:'TATAMOTORS',name:'Tata Motors Limited'}],async url=>{
+   requests.push(url);
+   if(url.includes('/v1/finance/search')) {
+     const payload={quotes:[
+       {symbol:'UNRELATED.NS',quoteType:'EQUITY',longname:'Unrelated Motors Limited'},
+       {symbol:'TMCV.NS',quoteType:'EQUITY',longname:'Tata Motors Limited'},
+     ]};
+     return {ok:true,text:async()=>`Markdown Content:\n${JSON.stringify(payload)}`};
+   }
+   const encoded=url.split('symbols=')[1].split('%26range')[0];
+   const symbols=decodeURIComponent(encoded).split(',');
+   const rows=symbols.includes('TMCV.NS')
+     ? [{symbol:'TMCV.NS',response:[{meta:{symbol:'TMCV.NS',currency:'INR',longName:'Tata Motors Limited',regularMarketPrice:400,regularMarketTime:Date.now()/1000}}]}]
+     : [];
+   return {ok:true,text:async()=>`Markdown Content:\n${JSON.stringify({spark:{result:rows,error:null}})}`};
+ });
+ assert.ok(requests.some(url=>url.includes('/v1/finance/search')));
+ assert.equal(result.quotes.TATAMOTORS.price,400);
+ assert.equal(result.quotes.TATAMOTORS.exchange,'NSE');
  assert.deepEqual(result.errors,[]);
 });
 

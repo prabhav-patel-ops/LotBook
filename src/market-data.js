@@ -109,7 +109,9 @@ export async function fetchYahooFallback(symbol, fetcher = fetch, companyName = 
   throw lastError;
 }
 
-const YAHOO_BATCH_SIZE = 25;
+// Jina currently rejects longer nested Yahoo URLs even when it returns HTTP
+// 200. Ten Indian symbols keep the relay URL below that failure threshold.
+const YAHOO_BATCH_SIZE = 10;
 const chunks = (items, size = YAHOO_BATCH_SIZE) => {
   const result = [];
   for (let index = 0; index < items.length; index += size) result.push(items.slice(index, index + size));
@@ -162,6 +164,36 @@ async function fetchYahooSparkWithRetry(entries, suffix, fetcher, fetchedAt) {
   }
 }
 
+async function discoverYahooSymbol(entry, fetcher) {
+  if (companyTokens(entry.companyName).length < 2) return null;
+  const query = encodeURIComponent(entry.companyName).replace(/%26/g, '%2526');
+  const target = `https://query1.finance.yahoo.com/v1/finance/search?q=${query}%26quotesCount=8%26newsCount=0`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetcher(`https://r.jina.ai/${target}`, {
+      headers:{'X-No-Cache':'true',accept:'text/plain'},signal:controller.signal,cache:'no-store',
+    });
+    if (!response.ok) return null;
+    const text = await response.text();
+    const marker = text.indexOf('Markdown Content:');
+    const start = text.indexOf('{', marker);
+    if (marker < 0 || start < 0 || text.length > 200000) return null;
+    const payload = JSON.parse(text.slice(start).trim());
+    const candidates = (Array.isArray(payload?.quotes) ? payload.quotes : []).map(candidate => {
+      const match = /^(.+)\.(NS|BO)$/.exec(String(candidate?.symbol || '').toUpperCase());
+      if (!match || candidate?.quoteType !== 'EQUITY') return null;
+      const actualName = candidate.longname || candidate.shortname;
+      return companyIdentityMatches(entry.companyName, actualName, match[1])
+        ? {...entry,ticker:match[1],suffix:match[2] === 'BO' ? '.BO' : '.NS',verifyBse:true}
+        : null;
+    }).filter(Boolean);
+    const preferred = entry.exchange === 'BSE' ? ['.BO','.NS'] : ['.NS','.BO'];
+    return preferred.map(suffix => candidates.find(candidate => candidate.suffix === suffix)).find(Boolean) || null;
+  } catch { return null; }
+  finally { clearTimeout(timeout); }
+}
+
 export async function fetchYahooBatchQuotes(holdings, fetcher = fetch, fetchedAt = new Date().toISOString()) {
   const entries = holdings.map(holding => {
     const mapped = marketTicker(holding?.symbol);
@@ -193,7 +225,27 @@ export async function fetchYahooBatchQuotes(holdings, fetcher = fetch, fetchedAt
     } catch { stillMissing.push(...batch); }
   }
   stillMissing.push(...unresolved.filter(entry => entry.exchange === 'BSE'));
-  return {quotes, errors:stillMissing.map(entry => `${entry.symbol}: no verified NSE or BSE quote was returned`)};
+
+  // Broker statements can retain an old exchange ticker after a rename or
+  // demerger. Discover the current Yahoo symbol from the company identity,
+  // then verify its INR quote; no ticker-specific rename table is required.
+  const discovered = [];
+  const finalMissing = [];
+  for (const entry of stillMissing) {
+    const candidate = await discoverYahooSymbol(entry, fetcher);
+    if (candidate) discovered.push(candidate);
+    else finalMissing.push(entry);
+  }
+  for (const suffix of ['.NS','.BO']) {
+    for (const batch of chunks(discovered.filter(entry => entry.suffix === suffix))) {
+      try {
+        const result = await fetchYahooSparkWithRetry(batch, suffix, fetcher, fetchedAt);
+        Object.assign(quotes, result.quotes);
+        finalMissing.push(...result.missing);
+      } catch { finalMissing.push(...batch); }
+    }
+  }
+  return {quotes, errors:finalMissing.map(entry => `${entry.symbol}: no verified NSE or BSE quote was returned`)};
 }
 
 /** Yahoo reports bonuses as split-like factors; NSE identifies the actual action. */
