@@ -1,4 +1,11 @@
-# LotBook 1.6.2 broker-total and tax-boundary verification — 15 October 2026
+# LotBook 1.7.0 portfolio filter verification — 16 October 2026
+
+- Holdings can be filtered to all positions, positions trading above their cheapest open purchase, or positions trading at/below that purchase. Unknown-price positions remain available under All instead of being misclassified.
+- The portfolio can be ordered by name, current price, return percentage, unrealised profit/loss, or percentage distance from the cheapest open purchase, in either direction. Missing numeric values stay at the end.
+- The cheapest-purchase filter reuses the verified corporate-action-adjusted lot comparison, so eligible splits and bonuses are reflected before a position is marked green or red.
+- All 177 automated tests and the production build passed. New tests cover filters, text search, each numeric sort and missing-value ordering.
+
+## LotBook 1.6.2 broker-total and tax-boundary verification — 15 October 2026
 
 - The Holdings headline now prefers the imported Groww quantity × average-cost total only when every current quantity matches and no transaction is newer than that statement. Otherwise it says `FIFO estimate` instead of presenting a selected-lot diary cost as Groww's number.
 - LotBook's lowest-price-first remaining cost is retained separately under `Understand your profit figures`. The independent FIFO replay excludes diary buy charges from the broker-style invested estimate.

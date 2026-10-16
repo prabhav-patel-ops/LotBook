@@ -6,12 +6,12 @@ A local-only personal equity trading diary. Track purchase lots, core holdings, 
 
 **User flow and privacy:** [Guide](public/guide.html)
 
-## Everyday use · v1.6.2
+## Everyday use · v1.7.0
 
 - **Diary → Activity:** newest-first date groups, search by stock name/symbol, type/month filters, and Show more. Tap any trade for costs, matched purchase lots, and record details. Sales show sold-lot P&L; purchases show gross purchase value with distinct labels.
 - **Diary → Notes:** keep decision notes separately from transactions. Unsaved text survives in-app tab changes; Save note is required to keep it after a reload.
 - **Diary → Rights trades:** separate entitlement records, when present. No acquisition cost or profit is invented.
-- **Holdings:** each quoted stock is green when its current price is above the cheapest purchase lot still held, and red when it is at or below that price. The comparison adjusts eligible purchases for verified bonuses and splits (for example, ₹808 is compared as ₹404 after a 1:1 bonus), while preserving the original transaction and any saved lot selections. A zero-cost bonus entry is never used as the comparison price. The headline Groww invested value uses a current, quantity-matching holdings statement when available; otherwise it is explicitly labelled as a FIFO estimate. LotBook's selected-lot cost remains visible separately in the profit explanation.
+- **Holdings:** filter the portfolio to all stocks, green stocks above the cheapest open buy, or red stocks at/below it. Sort by name, current price, return, unrealised P&L, or percentage distance from the cheapest buy, in either direction. The comparison adjusts eligible purchases for verified bonuses and splits (for example, ₹808 is compared as ₹404 after a 1:1 bonus), while preserving the original transaction and any saved lot selections. A zero-cost bonus entry is never used as the comparison price. The headline Groww invested value uses a current, quantity-matching holdings statement when available; otherwise it is explicitly labelled as a FIFO estimate. LotBook's selected-lot cost remains visible separately in the profit explanation.
 - **Statements:** order history first, holdings second; optional broker reports are grouped below. Replacement always requires review and confirmation.
 - **Settings:** backups and updates first; quote settings, profile, installation, privacy and clearing data are expandable sections.
 
