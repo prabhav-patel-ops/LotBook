@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { growwInvestedSummary, holdingPriceSignal, holdingReturnPercent } from '../src/ui-logic.js';
+import { growwInvestedSummary, holdingPriceSignal, holdingReturnPercent, selectHoldings } from '../src/ui-logic.js';
 
 test('Groww invested uses a current quantity-matching holdings statement', () => {
   assert.deepEqual(growwInvestedSummary({
@@ -63,4 +63,23 @@ test('price signal stays neutral without a quote or an open purchase lot', () =>
     holdingPriceSignal({currentPrice: 125, lots: [{price: 100, remaining: 0}]}),
     {status: 'unknown', lowestPrice: null, difference: null},
   );
+});
+
+const filterHoldings = [
+  {symbol:'GREEN',name:'Green Ltd',quantity:2,currentPrice:150,cost:200,unrealized:100,lots:[{price:100,remaining:2}]},
+  {symbol:'RED',name:'Red Ltd',quantity:3,currentPrice:80,cost:300,unrealized:-60,lots:[{price:100,remaining:3}]},
+  {symbol:'UNKNOWN',name:'Unknown Ltd',quantity:1,currentPrice:null,cost:50,unrealized:null,lots:[{price:50,remaining:1}]},
+];
+
+test('portfolio filter isolates holdings above or not above the adjusted cheapest buy', () => {
+  assert.deepEqual(selectHoldings(filterHoldings,{position:'above'}).map(row=>row.symbol), ['GREEN']);
+  assert.deepEqual(selectHoldings(filterHoldings,{position:'not-above'}).map(row=>row.symbol), ['RED']);
+  assert.deepEqual(selectHoldings(filterHoldings,{query:'unknown'}).map(row=>row.symbol), ['UNKNOWN']);
+});
+
+test('portfolio sorting supports price, return, P&L and cheapest-buy distance', () => {
+  assert.deepEqual(selectHoldings(filterHoldings,{sort:'price',direction:'desc'}).map(row=>row.symbol), ['GREEN','RED','UNKNOWN']);
+  assert.deepEqual(selectHoldings(filterHoldings,{sort:'returns',direction:'asc'}).map(row=>row.symbol), ['RED','GREEN','UNKNOWN']);
+  assert.deepEqual(selectHoldings(filterHoldings,{sort:'pnl',direction:'desc'}).map(row=>row.symbol), ['GREEN','RED','UNKNOWN']);
+  assert.deepEqual(selectHoldings(filterHoldings,{sort:'cheapest-gap',direction:'desc'}).map(row=>row.symbol), ['GREEN','RED','UNKNOWN']);
 });

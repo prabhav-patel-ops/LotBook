@@ -4,7 +4,7 @@ import { analyse, validateTransaction, orderedTransactions } from "./ledger.js";
 import { parseStatement, parseRows } from "./importer.js";
 import { parseReferenceStatement, summarizeReferenceEntries } from "./reference-reports.js";
 import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js";
-import { csvCell, allocateLots, growwInvestedSummary, holdingPriceSignal, holdingReturnPercent } from "./ui-logic.js";
+import { csvCell, allocateLots, growwInvestedSummary, holdingPriceSignal, holdingReturnPercent, selectHoldings } from "./ui-logic.js";
 import { selectDiaryEntries } from "./diary-view.js";
 import { prepareTradeReplacement, applyVerifiedCorporateActions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
 import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote, fetchYahooBatchQuotes, fetchVerifiedShareEvents } from "./market-data.js";
@@ -41,6 +41,9 @@ let state,
   view = "holdings",
   query = "",
   holdingMetric = "pnl",
+  holdingPosition = "all",
+  holdingSort = "name",
+  holdingSortDirection = "asc",
   selected = "",
   pending = null,
   installPrompt = null,
@@ -329,20 +332,29 @@ function holdings(a) {
   for (const cycle of a.cycles) soldResults.set(cycle.symbol, (soldResults.get(cycle.symbol) || 0) + cycle.net);
   const heldSymbols=new Set(a.holdings.map(h=>h.symbol));
   const closedSymbols=[...soldResults].filter(([symbol])=>!heldSymbols.has(symbol) && (!query||symbol.toLowerCase().includes(query.toLowerCase())));
-  const list = a.holdings.filter(
-    (h) =>
-      h.quantity > 0 &&
-      (!query ||
-        h.symbol.toLowerCase().includes(query.toLowerCase()) ||
-        h.name?.toLowerCase().includes(query.toLowerCase())),
-  );
+  const allHeld = a.holdings.filter((h) => h.quantity > 0);
+  const positionCounts = allHeld.reduce((counts, holding) => {
+    const status = holdingPriceSignal(holding).status;
+    if (status === 'above') counts.above += 1;
+    else if (status === 'below' || status === 'at') counts.notAbove += 1;
+    else counts.unknown += 1;
+    return counts;
+  }, {above:0, notAbove:0, unknown:0});
+  const list = selectHoldings(a.holdings, {
+    query,
+    position: holdingPosition,
+    sort: holdingSort,
+    direction: holdingSortDirection,
+  });
+  const filtered = Boolean(query || holdingPosition !== 'all');
   const rows = list.length
     ? `<div class="holdings-head"><span>Stock / price</span><span>Average / cost</span><span>Value / quote</span><span>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Unrealised return'}</span></div>${list.map((h) => {
       const priceSignal = holdingPriceSignalText(h);
       return `<button class="holding-row" data-stock="${esc(h.symbol)}" data-price-position="${priceSignal.status}"><div class="stock-main"><span class="stock-icon">${esc(h.symbol.slice(0, 2))}</span><div><b>${esc(h.name || h.symbol)}</b><small>${esc(h.symbol)} · ${num(h.quantity)} shares</small><small class="stock-price">Price ${money(h.currentPrice)} / share</small><small class="stock-quote">${esc(quoteSummary(h.symbol))}</small>${priceSignal.text?`<small class="stock-lot-signal">${priceSignal.text}</small>`:''}${soldResults.has(h.symbol)?`<small class="stock-sold">Sold shares P&amp;L ${money(soldResults.get(h.symbol))}</small>`:''}</div></div><div><b>${money(h.averageCost)}</b><small>${money(h.cost)}</small></div><div><b>${money(h.currentValue)}</b><small>Value at available price</small></div><div><b class="${h.unrealized === null ? "" : tone(h.unrealized)}">${holdingMetricText(h)}</b><small>${holdingMetric === 'pnl' ? 'Unrealised P&L' : 'Return on remaining cost'}</small><small>View lots →</small></div></button>`;
     }).join("")}`
-    : `<div class="empty"><span class="empty-icon">◫</span><h3>${query ? "No matching stocks" : "Your portfolio starts here"}</h3><p>Import your Groww order history, or add your first purchase.<br>Every purchase becomes a lot you can follow.</p><button data-action="buy">Add a purchase</button><button class="secondary" data-view="import">Import statements</button></div>`;
-  return `${stats(a)}${marketPanel(a)}<section class="panel"><div class="panel-title portfolio-title"><div><h2>Portfolio</h2><span>${a.holdings.filter((h) => h.quantity > 0).length} holdings · Tap a stock to see lots</span></div><div class="portfolio-controls"><input class="search" id="search" value="${esc(query)}" placeholder="Search your stocks" aria-label="Search stocks"><div class="metric-switch" role="group" aria-label="Holding result display"><button data-action="holdingmetric" data-metric="pnl" aria-pressed="${holdingMetric === 'pnl'}" class="${holdingMetric === 'pnl' ? 'active' : ''}">P&L</button><button data-action="holdingmetric" data-metric="returns" aria-pressed="${holdingMetric === 'returns'}" class="${holdingMetric === 'returns' ? 'active' : ''}">Returns %</button></div></div></div>${rows}</section>${closedSymbols.length?`<section class="panel mini"><h2>Fully sold stocks</h2><p>Diary result after recorded costs. Automatic sales use the lowest-price lots; custom matches are retained.</p>${closedSymbols.map(([symbol,net])=>`<div class="kv"><span><b>${esc(symbol)}</b><small>No shares remaining</small></span><b class="${tone(net)}">${money(net)}</b></div>`).join('')}</section>`:''}${profitExplanation(a)}${reconciliation(a)}<div class="two-col"><section class="panel mini"><div class="panel-title"><h2>Cash balance</h2><button class="text-button" data-action="cash">Update</button></div><strong class="large">${money(state.cash)}</strong><p>Enter the balance shown in Groww manually. It is not reconstructed from equity trades.</p></section><section class="panel mini"><div class="panel-title"><h2>Your diary, your device</h2><span>↗</span></div><p>Export a backup regularly. Browser storage can be cleared or lost when you change devices.</p><button class="secondary" data-action="export">Export my diary</button></section></div>`;
+    : `<div class="empty"><span class="empty-icon">◫</span><h3>${filtered ? "No stocks match these filters" : "Your portfolio starts here"}</h3><p>${filtered ? 'Try another search or clear the portfolio filters.' : 'Import your Groww order history, or add your first purchase.<br>Every purchase becomes a lot you can follow.'}</p>${filtered?'<button class="secondary" data-action="holdingreset">Clear filters</button>':'<button data-action="buy">Add a purchase</button><button class="secondary" data-view="import">Import statements</button>'}</div>`;
+  const filterBar = `<div class="holding-filter-bar"><div class="holding-position-filters" role="group" aria-label="Position versus cheapest open buy"><button data-action="holdingposition" data-position="all" aria-pressed="${holdingPosition==='all'}" class="${holdingPosition==='all'?'active':''}">All <span>${allHeld.length}</span></button><button data-action="holdingposition" data-position="above" aria-pressed="${holdingPosition==='above'}" class="positive-filter ${holdingPosition==='above'?'active':''}">Above cheapest <span>${positionCounts.above}</span></button><button data-action="holdingposition" data-position="not-above" aria-pressed="${holdingPosition==='not-above'}" class="negative-filter ${holdingPosition==='not-above'?'active':''}">Below / at <span>${positionCounts.notAbove}</span></button></div><div class="holding-sort-controls"><label><span>Sort by</span><select id="holding-sort"><option value="name" ${holdingSort==='name'?'selected':''}>Name</option><option value="returns" ${holdingSort==='returns'?'selected':''}>Return %</option><option value="price" ${holdingSort==='price'?'selected':''}>Current price</option><option value="cheapest-gap" ${holdingSort==='cheapest-gap'?'selected':''}>Distance from cheapest buy</option><option value="pnl" ${holdingSort==='pnl'?'selected':''}>Unrealised P&amp;L</option></select></label><button class="sort-direction" data-action="holdingsortdirection" aria-label="Sort ${holdingSortDirection==='asc'?'descending':'ascending'}" title="Reverse sort order">${holdingSortDirection==='asc'?'↑ Low to high':'↓ High to low'}</button></div></div>`;
+  return `${stats(a)}${marketPanel(a)}<section class="panel"><div class="panel-title portfolio-title"><div><h2>Portfolio</h2><span>${list.length}${filtered?` of ${allHeld.length}`:''} holdings · Tap a stock to see lots${positionCounts.unknown?` · ${positionCounts.unknown} without comparison`:''}</span></div><div class="portfolio-controls"><input class="search" id="search" value="${esc(query)}" placeholder="Search your stocks" aria-label="Search stocks"><div class="metric-switch" role="group" aria-label="Holding result display"><button data-action="holdingmetric" data-metric="pnl" aria-pressed="${holdingMetric === 'pnl'}" class="${holdingMetric === 'pnl' ? 'active' : ''}">P&amp;L</button><button data-action="holdingmetric" data-metric="returns" aria-pressed="${holdingMetric === 'returns'}" class="${holdingMetric === 'returns' ? 'active' : ''}">Returns %</button></div></div></div>${filterBar}${rows}</section>${closedSymbols.length?`<section class="panel mini"><h2>Fully sold stocks</h2><p>Diary result after recorded costs. Automatic sales use the lowest-price lots; custom matches are retained.</p>${closedSymbols.map(([symbol,net])=>`<div class="kv"><span><b>${esc(symbol)}</b><small>No shares remaining</small></span><b class="${tone(net)}">${money(net)}</b></div>`).join('')}</section>`:''}${profitExplanation(a)}${reconciliation(a)}<div class="two-col"><section class="panel mini"><div class="panel-title"><h2>Cash balance</h2><button class="text-button" data-action="cash">Update</button></div><strong class="large">${money(state.cash)}</strong><p>Enter the balance shown in Groww manually. It is not reconstructed from equity trades.</p></section><section class="panel mini"><div class="panel-title"><h2>Your diary, your device</h2><span>↗</span></div><p>Export a backup regularly. Browser storage can be cleared or lost when you change devices.</p><button class="secondary" data-action="export">Export my diary</button></section></div>`;
 }
 function reconciliation(a) {
   if (!state.snapshots.length && !state.snapshotComplete) return "";
@@ -711,10 +723,29 @@ document.addEventListener("click", (e) => {
     }
     return;
   }
+  if (el.dataset.action === 'holdingposition') {
+    if (['all', 'above', 'not-above'].includes(el.dataset.position)) {
+      holdingPosition = el.dataset.position;
+      render();
+    }
+    return;
+  }
+  if (el.dataset.action === 'holdingsortdirection') {
+    holdingSortDirection = holdingSortDirection === 'asc' ? 'desc' : 'asc';
+    render();
+    return;
+  }
   safely(() => {
     switch (el.dataset.action) {
       case "close":
         close();
+        break;
+      case "holdingreset":
+        query = '';
+        holdingPosition = 'all';
+        holdingSort = 'name';
+        holdingSortDirection = 'asc';
+        render();
         break;
       case "privacy":
         if(demo){state={...state,privacyMode:!state.privacyMode};render();}
@@ -1043,6 +1074,13 @@ document.addEventListener("input", (e) => {
   if (e.target.closest("#sale-form")) previewSale();
 });
 document.addEventListener("change", async (e) => {
+  if (e.target.id === 'holding-sort') {
+    holdingSort = e.target.value;
+    if (holdingSort === 'name') holdingSortDirection = 'asc';
+    else holdingSortDirection = 'desc';
+    render();
+    $('#holding-sort')?.focus({preventScroll:true});
+  }
   if (e.target.id === 'diary-kind' || e.target.id === 'diary-month') {
     const controlId = e.target.id;
     if (e.target.id === 'diary-kind') diaryKind = e.target.value;
