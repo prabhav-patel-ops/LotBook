@@ -1,4 +1,11 @@
-# LotBook 1.7.0 portfolio filter verification — 16 October 2026
+# LotBook 1.7.1 mobile reconciliation verification — 18 October 2026
+
+- Profit figures and holdings-statement rows now use explicit mobile grids, block-level labels and non-wrapping monetary values instead of concatenated text and broken amount lines.
+- The statement comparison shows only differing rows (or a small matched sample), hides the remaining matched positions, and treats newer manual diary activity as neutral context rather than an error.
+- A snapshot whose quantity factor and inverse average-cost movement agree within tolerance triggers another generic public corporate-action verification. No LICI, bonus or split value is hardcoded and no shares are created without external verification.
+- All 178 automated tests and the production build passed.
+
+## LotBook 1.7.0 portfolio filter verification — 16 October 2026
 
 - Holdings can be filtered to all positions, positions trading above their cheapest open purchase, or positions trading at/below that purchase. Unknown-price positions remain available under All instead of being misclassified.
 - The portfolio can be ordered by name, current price, return percentage, unrealised profit/loss, or percentage distance from the cheapest open purchase, in either direction. Missing numeric values stay at the end.

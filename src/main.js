@@ -6,7 +6,7 @@ import { parseReferenceStatement, summarizeReferenceEntries } from "./reference-
 import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js";
 import { csvCell, allocateLots, growwInvestedSummary, holdingPriceSignal, holdingReturnPercent, selectHoldings } from "./ui-logic.js";
 import { selectDiaryEntries } from "./diary-view.js";
-import { prepareTradeReplacement, applyVerifiedCorporateActions, normalizeSnapshots, reconcileHoldings } from "./import-workflow.js";
+import { prepareTradeReplacement, applyVerifiedCorporateActions, normalizeSnapshots, reconcileHoldings, suspectedShareAdjustmentSymbols } from "./import-workflow.js";
 import { MARKET_KEY, MARKET_CACHE_KEY, MARKET_INTERVAL_KEY, marketIntervalMs, marketTicker, readMarketCache, usableMarketQuote, resolveHoldingPrice, fetchIndianQuote, fetchYahooBatchQuotes, fetchVerifiedShareEvents } from "./market-data.js";
 const $ = (s) => document.querySelector(s),
   esc = (s) =>
@@ -136,7 +136,8 @@ async function refreshCorporateActions(force = false) {
   try { checked = JSON.parse(localStorage.getItem(ACTION_CHECK_KEY) || '{}'); }
   catch { checked = {}; }
   if (!checked || typeof checked !== 'object' || Array.isArray(checked)) checked = {};
-  const due = [...earliest].filter(([symbol]) => force || Date.now() - Number(checked[symbol] || 0) > 7 * 24 * 60 * 60 * 1000);
+  const unresolved = new Set(suspectedShareAdjustmentSymbols(state.transactions,state.snapshots,state.snapshotDate));
+  const due = [...earliest].filter(([symbol]) => force || unresolved.has(symbol) || Date.now() - Number(checked[symbol] || 0) > 7 * 24 * 60 * 60 * 1000);
   if (!due.length) return;
   actionRefreshing = true;
   actionMessage = 'Checking exchange-confirmed share changes…';
@@ -325,7 +326,7 @@ function stats(a) {
   return `<div class="stats summary-stats"><div class="stat-card"><span>Groww invested</span><strong>${money(broker.value)}</strong><small>${esc(brokerLabel)}</small></div><div class="stat-card"><span>Current value</span><strong>${money(enteredValue)}</strong><small>${a.totals.unpriced ? 'Partial · '+a.totals.unpriced+' missing prices' : 'At available market / manual prices'}</small></div><div class="stat-card featured"><span>Sold-lot profit / loss</span><strong class="${tone(a.totals.realizedNet)}">${money(a.totals.realizedNet)}</strong><small>${a.totals.unknownCharges ? "Some fees missing · provisional" : "After recorded costs · before tax"}</small></div></div>`;
 }
 function profitExplanation(a) {
-  return `<details class="panel disclosure"><summary>Understand your profit figures</summary><div class="disclosure-body"><p>Sold-lot results use the lowest-price available lots by default. Custom lot choices are kept. Changing the match changes diary attribution, not broker proceeds, taxable FIFO or total wealth.</p><div class="kv"><span>Selected-lot cost still held<small>LotBook diary basis, including recorded buy costs</small></span><b>${money(a.totals.invested)}</b></div><div class="kv"><span>FIFO comparison</span><b class="${tone(a.totals.fifoNet)}">${money(a.totals.fifoNet)}</b></div><p class="fine">The FIFO figure is an independent comparison, not a verified broker or tax result. ${a.totals.unknownCharges?'Fees are missing for '+a.totals.unknownCharges+' trades; profit is provisional. Add costs inside each trade in Diary.':'Includes recorded costs only; verify against your contract notes.'}</p></div></details>`;
+  return `<details class="panel disclosure"><summary>Understand your profit figures</summary><div class="disclosure-body"><p>Sold-lot results use the lowest-price available lots by default. Custom lot choices are kept. Changing the match changes diary attribution, not broker proceeds, taxable FIFO or total wealth.</p><div class="kv profit-kv"><span><b>Selected-lot cost still held</b><small>LotBook diary basis, including recorded buy costs</small></span><b class="money-value">${money(a.totals.invested)}</b></div><div class="kv profit-kv"><span><b>FIFO comparison</b><small>Independent diary comparison</small></span><b class="${tone(a.totals.fifoNet)} money-value">${money(a.totals.fifoNet)}</b></div><p class="fine">This is not a verified broker or tax result. ${a.totals.unknownCharges?'Fees are missing for '+a.totals.unknownCharges+' trades; profit is provisional. Add costs inside each trade in Diary.':'Includes recorded costs only; verify against your contract notes.'}</p></div></details>`;
 }
 function holdings(a) {
   const soldResults = new Map();
@@ -361,7 +362,13 @@ function reconciliation(a) {
   const cutoff=state.snapshotDate;
   const rows=reconcileHoldings(state.transactions.filter(t=>!cutoff||t.date<=cutoff),state.snapshots,{complete:state.snapshotComplete});
   const diffs=rows.filter(r=>Math.abs(r.difference)>1e-8);
-  return `<details class="panel disclosure"><summary>Check against your holdings statement${diffs.length?` · ${diffs.length} differences`:" · Quantities match"}</summary><div class="disclosure-body"><p>${state.snapshotComplete?'Complete list':'Partial list · only supplied stocks checked'} · ${cutoff?`As of ${esc(cutoff)}`:'Undated snapshot · verify its date'}</p><p>${diffs.length?`${diffs.length} quantity differences need review. Retrieve missing history; snapshots never create purchases.`:'Supplied quantities match the diary at this date. This does not prove complete history or correct cost basis.'}</p>${rows.map(r=>`<div class="kv"><span><b>${esc(r.symbol)}</b><small>Broker average ${money(r.averageCost)}</small></span><span>Snapshot ${num(r.reported)} · Diary ${num(r.actual)}<small class="${r.difference?'negative':''}">Difference ${num(r.difference)}</small></span></div>`).join('')}<p class="fine">Broker averages and diary averages have different bases. Groww may exclude same-day activity; chosen lots and recorded buy charges also affect diary cost. Check transfers, splits, bonuses and settlement cut-offs separately.</p><button class="secondary" data-action="snapshot">Enter / replace snapshot manually</button></div></details>`;
+  const newer=cutoff&&state.transactions.some(t=>t.date>cutoff);
+  const matching=rows.length-diffs.length;
+  const comparison=diffs.length?diffs:rows.slice(0,3);
+  const note=diffs.length
+    ? `${diffs.length} ${diffs.length===1?'quantity differs':'quantities differ'}. ${newer?'Your diary contains newer activity, so these are comparison notes—not errors.':'Review only if you did not trade or receive a share adjustment around the statement date.'}`
+    : 'Supplied quantities match the diary at the statement date.';
+  return `<details class="panel disclosure reconciliation"><summary>Holdings statement comparison${diffs.length?` · ${diffs.length} noted`:" · Matched"}</summary><div class="disclosure-body"><div class="reconciliation-meta"><span>${state.snapshotComplete?'Complete statement':'Partial statement'}</span><span>${cutoff?`As of ${esc(cutoff)}`:'Date not supplied'}</span></div><p>${note}</p>${comparison.map(r=>`<div class="reconciliation-row"><span><b>${esc(r.symbol)}</b><small>Broker average ${money(r.averageCost)}</small></span><span><b>${num(r.reported)}</b><small>Statement</small></span><span><b>${num(r.actual)}</b><small>Diary at that date</small></span>${Math.abs(r.difference)>1e-8?`<span class="reconciliation-note"><b>${r.difference>0?'+':''}${num(r.difference)}</b><small>Statement − diary</small></span>`:''}</div>`).join('')}${matching?`<p class="matched-count">✓ ${matching} other position${matching===1?'':'s'} matched and hidden</p>`:''}<p class="fine">This comparison is informational. Newer manual purchases are valid diary activity; snapshots never create or delete purchases. Verified bonuses and splits are applied separately.</p><button class="secondary" data-action="snapshot">Enter / replace snapshot</button></div></details>`;
 }
 function cycles(a) {
   const months={};
@@ -1190,6 +1197,7 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
 }
 render();
 scheduleMarketRefresh();
+queueMicrotask(() => refreshCorporateActions(false));
 setInterval(scheduleMarketRefresh, 60000);
 document.addEventListener('visibilitychange', scheduleMarketRefresh);
-window.addEventListener('online', scheduleMarketRefresh);
+window.addEventListener('online', () => { scheduleMarketRefresh(); refreshCorporateActions(false); });
