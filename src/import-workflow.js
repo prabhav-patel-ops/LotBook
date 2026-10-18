@@ -151,3 +151,23 @@ export function reconcileHoldings(transactions,snapshots,{complete=false}={}){
  return [...symbols].map(symbol=>({symbol,reported:reported.get(symbol)?.quantity||0,actual:holdings.find(h=>h.symbol===symbol)?.quantity||0,averageCost:reported.get(symbol)?.averageCost??null}))
   .map(row=>({...row,difference:row.reported-row.actual}));
 }
+
+/**
+ * Identify quantity/cost movements that look like an unresolved bonus or
+ * split. This never creates shares; it only requests another public,
+ * exchange-verified corporate-action check for the matching symbol.
+ */
+export function suspectedShareAdjustmentSymbols(transactions,snapshots,snapshotDate=''){
+ const eligible=transactions.filter(t=>!snapshotDate||t.date<=snapshotDate);
+ const holdings=new Map(analyse(eligible).holdings.map(h=>[h.symbol,h]));
+ return snapshots.filter(snapshot=>{
+  const holding=holdings.get(snapshot.symbol);
+  const reported=Number(snapshot.quantity),actual=Number(holding?.quantity);
+  const brokerAverage=Number(snapshot.averageCost),diaryAverage=Number(holding?.averageCost);
+  if(!(reported>actual&&actual>0&&brokerAverage>0&&diaryAverage>0))return false;
+  const factor=reported/actual;
+  if(!(factor>1.05&&factor<=20))return false;
+  const adjustedAverage=diaryAverage/factor;
+  return Math.abs(adjustedAverage-brokerAverage)/brokerAverage<=0.03;
+ }).map(snapshot=>snapshot.symbol);
+}

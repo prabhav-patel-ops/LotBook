@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {analyse} from '../src/ledger.js';
 import {holdingPriceSignal} from '../src/ui-logic.js';
-import {prepareTradeReplacement, applyVerifiedCorporateActions, reconcileHoldings} from '../src/import-workflow.js';
+import {prepareTradeReplacement, applyVerifiedCorporateActions, reconcileHoldings, suspectedShareAdjustmentSymbols} from '../src/import-workflow.js';
 import {fresh, validateBackup} from '../src/storage.js';
 
 const buy=(symbol,date,quantity,price,id)=>({id,symbol,date,side:'BUY',quantity,price,charges:0,chargesKnown:true,purpose:'core'});
@@ -50,6 +50,12 @@ test('verified LICI bonus repairs existing saved holdings and cost without a re-
  assert.equal(reconcileHoldings(result.transactions,snapshots)[0].difference,0);
  validateBackup({...fresh(),transactions:result.transactions});
  assert.equal(applyVerifiedCorporateActions(result.transactions,[event()],snapshots,'2026-10-13').applied.length,0);
+});
+
+test('snapshot quantity and average cost generically request a fresh verified share-action check',()=>{
+ const transactions=[buy('LICI','2026-05-01',5,808,'lic-buy'),buy('OTHER','2026-05-01',4,100,'other')];
+ const snapshots=[{symbol:'LICI',quantity:10,averageCost:404},{symbol:'OTHER',quantity:6,averageCost:100}];
+ assert.deepEqual(suspectedShareAdjustmentSymbols(transactions,snapshots,'2026-10-15'),['LICI']);
 });
 
 test('bonus and split adjust the lowest open buy before the price signal',()=>{
