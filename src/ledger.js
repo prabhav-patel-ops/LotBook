@@ -131,6 +131,27 @@ export function orderedTransactions(transactions) {
  return ordered;
 }
 
+/** Remove one ordinary purchase without rewriting completed trading history. */
+export function removePurchaseTransaction(transactions, transactionId) {
+  if (!Array.isArray(transactions)) throw new Error('transactions must be an array');
+  const target = transactions.find(transaction => transaction?.id === transactionId);
+  if (!target) throw new Error('This purchase is no longer available.');
+  const purchase = validateTransaction(target);
+  if (purchase.side !== 'BUY' || purchase.corporateAction)
+    throw new Error('Only an ordinary purchase can be deleted here.');
+
+  const current = analyse(transactions);
+  if (current.errors.length) throw new Error('Resolve the diary error before deleting a purchase.');
+  if (current.cycles.some(cycle => cycle.lotId === purchase.id))
+    throw new Error('This purchase cannot be deleted because shares from it were already sold. Delete or correct the dependent sale first.');
+
+  const next = transactions.filter(transaction => transaction.id !== purchase.id);
+  const checked = analyse(next);
+  if (checked.errors.length)
+    throw new Error(`This purchase cannot be deleted because a later record depends on it: ${checked.errors[0].message}`);
+  return next;
+}
+
 function calculate(t, selected) {
   return selected.map(({ lot, quantity }) => {
     const gross = finite((t.price - lot.price) * quantity);

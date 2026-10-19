@@ -1,6 +1,6 @@
 import "./style.css";
 import "./refinement.css";
-import { analyse, validateTransaction, orderedTransactions } from "./ledger.js";
+import { analyse, validateTransaction, orderedTransactions, removePurchaseTransaction } from "./ledger.js";
 import { parseStatement, parseRows } from "./importer.js";
 import { parseReferenceStatement, summarizeReferenceEntries } from "./reference-reports.js";
 import { fresh, load, saveIfUnchanged, validateBackup, KEY } from "./storage.js";
@@ -53,6 +53,7 @@ let state,
   updateReady = false,
   importRun = 0;
 let diaryTab = 'activity', diaryQuery = '', diaryKind = 'all', diaryMonth = '', diaryLimit = 30, noteDraft = null, modalReturnFocus = null;
+let pendingPurchaseDeleteId = '';
 const displayDate = value => new Date(`${value}T12:00:00`).toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'});
 let marketQuotes = readMarketCache(localStorage),
   marketRefreshing = false,
@@ -404,8 +405,15 @@ function transactionDetail(transactionId) {
     ${!adjustment?`<div class="kv"><span>Quantity</span><b>${num(t.quantity)} shares</b></div><div class="kv"><span>Price per share</span><b>${money(t.price)}</b></div><div class="kv"><span>Trade value</span><b>${money(t.price*t.quantity)}</b></div><div class="kv"><span>Recorded costs</span><b>${t.chargesKnown?money(t.charges):'Not added'}</b></div>`:''}
     ${sale?`<details class="disclosure" open><summary>Matched purchase lots · ${cs.length}</summary>${cs.map(c=>`<div class="kv"><span>${displayDate(c.buyDate)}<small>${num(c.quantity)} shares at ${money(c.buyPrice)}</small></span><b class="${tone(c.net)}">${money(c.net)}</b></div>`).join('')}<p class="fine">Automatic sales fill lowest-price lots. Custom selections stay as chosen. ${cs.some(c=>!c.chargesKnown)?'Some costs are missing; this result is provisional.':'Includes recorded costs.'}</p></details>`:''}
     ${t.note?`<p class="note-text">${esc(t.note)}</p>`:''}
-    ${!adjustment?`<div class="detail-actions"><button class="secondary" data-action="charges" data-id="${esc(t.id)}">Edit costs</button>${sale?`<button class="secondary" data-action="allocation" data-id="${esc(t.id)}">Change lot match</button>`:''}</div>`:''}
+    ${!adjustment?`<div class="detail-actions"><button class="secondary" data-action="charges" data-id="${esc(t.id)}">Edit costs</button>${sale?`<button class="secondary" data-action="allocation" data-id="${esc(t.id)}">Change lot match</button>`:`<button class="text-button danger" data-action="deletepurchase" data-id="${esc(t.id)}">Delete purchase</button>`}</div>`:''}
     <details class="disclosure"><summary>Record information</summary>${[['ISIN',t.isin],['Exchange',t.exchange],['Order ID',t.exchangeOrderId],['Trade ID',t.tradeId]].filter(([,v])=>v).map(([k,v])=>`<div class="kv"><span>${k}</span><b>${esc(v)}</b></div>`).join('') || '<p class="fine">No additional identifiers recorded.</p>'}<p class="fine">Saved on this device. Broker records are unchanged.</p>${!adjustment&&t.id===state.transactions.at(-1)?.id?'<button class="text-button danger" data-action="undo">Undo last entered transaction</button>':''}</details>`);
+}
+function deletePurchaseForm(transactionId) {
+  const t = state.transactions.find(transaction => transaction.id === transactionId);
+  if (!t || t.side !== 'BUY' || t.corporateAction) throw Error('This purchase is no longer available.');
+  pendingPurchaseDeleteId = t.id;
+  const imported = Boolean(t.tradeId || t.exchangeOrderId || t.orderId || t.isin || t.exchange);
+  modal('Delete this purchase?', `<div class="transaction-hero"><small>${displayDate(t.date)}</small><strong>${esc(t.symbol)} · ${num(t.quantity)} shares</strong><span>${money(t.price)} per share</span></div><p>This removes only this purchase and recalculates the diary. It cannot be deleted if any of its shares were already sold.</p>${imported?'<p class="notice">This record contains broker identifiers. Re-import the complete order history if it was removed by mistake.</p>':''}<div class="detail-actions"><button class="secondary" data-action="close">Keep purchase</button><button class="danger" data-action="confirmdeletepurchase">Delete purchase</button></div>`);
 }
 function chargesForm(transactionId) {
   const t=state.transactions.find(t=>t.id===transactionId);
@@ -479,7 +487,7 @@ function stockDetail(symbol) {
   const soldNet=soldCycles.reduce((sum,c)=>sum+c.net,0);
   modal(
     symbol + " · Lot history",
-    `<div class="detail-summary"><div><small>Shares held</small><strong>${num(h.quantity)}</strong></div><div><small>Diary average</small><strong>${money(h.averageCost)}</strong></div><div><small>Core / trading</small><strong>${num(h.coreQuantity)} / ${num(h.tradingQuantity)}</strong></div></div>${soldCycles.length?`<p class="stock-sold"><b>Sold shares · diary P&amp;L: ${money(soldNet)}</b><br><small>${soldCycles.length} lot closure${soldCycles.length===1?'':'s'} · after recorded costs. Broker and tax P&amp;L may differ.</small></p>`:''}<div class="row-actions"><button data-action="buystock">＋ Purchase</button><button data-action="sell" ${h.quantity <= 0 ? "disabled" : ""}>Record sale</button><button class="secondary" data-action="quote">Update price</button></div><h3>Every purchase lot</h3><p class="fine">${esc(quoteDetail(symbol))}</p><p class="fine">Automatic matching starts with the cheapest available lot. You can change a sale's allocation in Diary.</p>${h.lots.map((l) => `<div class="lot-row"><div><b>${money(l.price)} per share</b><small>${esc(l.date)} · Bought ${num(l.quantity)} · Remaining ${num(l.remaining)}</small></div><select class="lot-purpose" data-id="${esc(l.id)}" aria-label="Purpose for lot bought ${esc(l.date)} at ${l.price}"><option value="core" ${l.purpose === "core" ? "selected" : ""}>Core</option><option value="trading" ${l.purpose === "trading" ? "selected" : ""}>Trading</option></select></div>`).join("")}<h3>Stock transaction history</h3>${tx.map((t) => `<div class="kv"><span>${esc(t.date)} · ${esc(t.side)} ${num(t.quantity)}</span><b>${money(t.price)}</b></div>`).join("")}`,
+    `<div class="detail-summary"><div><small>Shares held</small><strong>${num(h.quantity)}</strong></div><div><small>Diary average</small><strong>${money(h.averageCost)}</strong></div><div><small>Core / trading</small><strong>${num(h.coreQuantity)} / ${num(h.tradingQuantity)}</strong></div></div>${soldCycles.length?`<p class="stock-sold"><b>Sold shares · diary P&amp;L: ${money(soldNet)}</b><br><small>${soldCycles.length} lot closure${soldCycles.length===1?'':'s'} · after recorded costs. Broker and tax P&amp;L may differ.</small></p>`:''}<div class="row-actions"><button data-action="buystock">＋ Purchase</button><button data-action="sell" ${h.quantity <= 0 ? "disabled" : ""}>Record sale</button><button class="secondary" data-action="quote">Update price</button></div><h3>Every purchase lot</h3><p class="fine">${esc(quoteDetail(symbol))}</p><p class="fine">Automatic matching starts with the cheapest available lot. You can change a sale's allocation in Diary.</p>${h.lots.map((l) => `<div class="lot-row"><div><b>${money(l.price)} per share</b><small>${esc(l.date)} · Bought ${num(l.quantity)} · Remaining ${num(l.remaining)}</small></div><div class="lot-actions"><select class="lot-purpose" data-id="${esc(l.id)}" aria-label="Purpose for lot bought ${esc(l.date)} at ${l.price}"><option value="core" ${l.purpose === "core" ? "selected" : ""}>Core</option><option value="trading" ${l.purpose === "trading" ? "selected" : ""}>Trading</option></select>${!l.corporateAction?`<button class="text-button danger" data-action="deletepurchase" data-id="${esc(l.id)}" aria-label="Delete purchase of ${num(l.quantity)} ${esc(symbol)} shares from ${esc(l.date)}">Delete</button>`:''}</div></div>`).join("")}<h3>Stock transaction history</h3>${tx.map((t) => `<div class="kv"><span>${esc(t.date)} · ${esc(t.side)} ${num(t.quantity)}</span><b>${money(t.price)}</b></div>`).join("")}`,
   );
 }
 function saleForm() {
@@ -786,6 +794,26 @@ document.addEventListener("click", (e) => {
       case "charges":
         chargesForm(el.dataset.id);
         break;
+      case "deletepurchase":
+        deletePurchaseForm(el.dataset.id);
+        break;
+      case "confirmdeletepurchase": {
+        const target = state.transactions.find(transaction => transaction.id === pendingPurchaseDeleteId);
+        if (!target) throw Error('This purchase is no longer available.');
+        const transactions = removePurchaseTransaction(state.transactions, pendingPurchaseDeleteId);
+        const next = structuredClone(state);
+        next.transactions = transactions;
+        if (!transactions.some(transaction => transaction.symbol === target.symbol) && !next.snapshots.some(snapshot => snapshot.symbol === target.symbol)) {
+          delete next.prices[target.symbol];
+          delete marketQuotes[target.symbol];
+          try { localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(marketQuotes)); } catch {}
+        }
+        commit(next);
+        pendingPurchaseDeleteId = '';
+        close();
+        notify('Purchase deleted. Diary totals recalculated.');
+        break;
+      }
       case "allocation":
         allocationForm(el.dataset.id);
         break;

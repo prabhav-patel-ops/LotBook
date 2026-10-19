@@ -1,9 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analyse, validateTransaction } from '../src/ledger.js';
+import { analyse, validateTransaction, removePurchaseTransaction } from '../src/ledger.js';
 
 const buy = (id, overrides = {}) => ({ id, symbol: 'ABC', name: 'ABC Ltd', date: '2026-01-01', side: 'BUY', quantity: 10, price: 100, charges: 0, purpose: 'core', note: '', ...overrides });
 const sell = (id, overrides = {}) => buy(id, { date: '2026-01-03', side: 'SELL', price: 120, purpose: 'trading', ...overrides });
+
+test('deletes an unused purchase and recalculates the remaining diary', () => {
+  const transactions = [buy('mistake', { symbol: 'WRONG' }), buy('correct')];
+  const next = removePurchaseTransaction(transactions, 'mistake');
+  assert.deepEqual(next.map(transaction => transaction.id), ['correct']);
+  assert.deepEqual(analyse(next).holdings.map(holding => holding.symbol), ['ABC']);
+});
+
+test('refuses to delete a purchase whose shares were already sold', () => {
+  const transactions = [buy('purchase'), sell('sale', { allocations: [{ lotId: 'purchase', quantity: 10 }] })];
+  assert.throws(
+    () => removePurchaseTransaction(transactions, 'purchase'),
+    /shares from it were already sold/,
+  );
+});
 
 test('default fills lowest-price lot, independent broker FIFO differs, wealth agrees', () => {
   const buys = [buy('1300', { price: 1300 }), buy('1250', { date: '2026-01-02', price: 1250, purpose: 'trading' })];
